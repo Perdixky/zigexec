@@ -1,0 +1,31 @@
+pub const Handle = @import("request.zig").Handle;
+pub const current_offset = @import("request.zig").current_offset;
+pub const Description = @import("request.zig").Description;
+pub const Result = @import("request.zig").Result;
+pub const readSome = @import("operations/read.zig").readSome;
+pub const writeSome = @import("operations/write.zig").writeSome;
+pub const recv = @import("operations/recv.zig").recv;
+pub const send = @import("operations/send.zig").send;
+pub const sleepFor = @import("operations/sleep.zig").sleepFor;
+pub const openAt = @import("operations/open_at.zig").openAt;
+pub const close = @import("operations/close.zig").close;
+pub const fsync = @import("operations/fsync.zig").fsync;
+pub const accept = @import("operations/accept.zig").accept;
+pub const connect = @import("operations/connect.zig").connect;
+
+const types = @import("types.zig");
+pub const For = @import("context_api.zig").For;
+pub const ReadSome = types.ReadSome;
+pub const WriteSome = types.WriteSome;
+pub const Recv = types.Recv;
+pub const Send = types.Send;
+pub const SleepFor = types.SleepFor;
+pub const OpenAt = types.OpenAt;
+pub const Close = types.Close;
+pub const Fsync = types.Fsync;
+pub const Accept = types.Accept;
+pub const Connect = types.Connect;
+pub const Schedule = types.Schedule;
+
+pub const sendAll = @import("operations/send_all.zig").sendAll;
+pub const SendAll = types.SendAll;

@@ -1,0 +1,7 @@
+.{
+    .name = .zigexec,
+    .fingerprint = 0x4bb6340d9a0d7ffd,
+    .version = "0.2.0",
+    .minimum_zig_version = "0.17.0-dev.2127+e90365cd5",
+    .paths = .{ "build.zig", "build.zig.zon", "src", "tests", "examples", "README.md", "docs", ".zigversion" },
+}
