@@ -15,7 +15,7 @@ available. The tested compiler version is
 `0.17.0-dev.2127+e90365cd5`; later breaking changes on Zig master may require
 updates, and Zig 0.16 is not supported.
 
-Detailed design notes are currently available in Chinese under [`docs/`](docs/).
+Detailed design notes are available in both English and Chinese under [`docs/`](docs/).
 
 ## Build and test
 
@@ -273,7 +273,7 @@ algorithms wait before reusing child storage. See [the lifetime protocol](docs/l
 
 ## Documentation
 
-The complete Chinese design notes cover:
+The complete bilingual design notes cover:
 
 - [Architecture and stdexec correspondence](docs/design.md)
 - [Expressions and lifetimes](docs/expressions.md)
@@ -283,6 +283,7 @@ The complete Chinese design notes cover:
 - [Shared state and ownership](docs/shared.md)
 - [Repetition](docs/repeat.md)
 - [io_uring backend](docs/io_uring.md)
+- [Operation result storage and execution scopes](docs/lifetimes.md)
 
 ## License
 

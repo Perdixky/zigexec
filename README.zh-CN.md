@@ -70,7 +70,7 @@ zigexec.then: wrong_input.Length.call upstream argument 0: expected []const u8, 
 
 `letValue` 也接受已构造的 sender：`source.letValue(child, .{})` 在上游成功后连接并启动 child，不把上游值注入 child；需要使用上游值时使用工厂或 `upstream()` 子链。sender/子链形式的第二个参数必须是空的 `.{}`，三种形式均在编译期分派。
 
-完整语义、异步借用限制和迁移说明见 [链式表达式设计](docs/expressions.md)。
+完整语义、异步借用限制和迁移说明见 [链式表达式设计](docs/expressions.zh-CN.md)。
 
 ## 类型构造器与自动推导
 
@@ -101,7 +101,7 @@ const work = ex.just(.{@as(u16, 21)}).then(ex.Fn(twice), .{});
 
 `meta.ReturnOf(factory, .{参数类型...})` 查询泛型工厂的返回类型，`meta.ValuesOf/ValueOf/OperationOf/WaitResult` 查询 sender 的关联类型。这些 helper 不运行任务、不分配内存，也不进行 sender 类型擦除。
 
-Zig 仍要求函数边界声明返回类型，库不能提供任意函数体的 `auto` 返回推导。详见 [类型 API 设计与示例](docs/types.md)。
+Zig 仍要求函数边界声明返回类型，库不能提供任意函数体的 `auto` 返回推导。详见 [类型 API 设计与示例](docs/types.zh-CN.md)。
 
 ## 常用 API
 
@@ -142,7 +142,7 @@ const result_with_env = try task.syncWait(.{
 
 sender 在 start 中使用 `receiver.getEnv().getAllocator()` 并处理错误，业务链可以通过 `readAllocator()` 查询。环境穿过调度、并发和取消包装继续传递；查询缺失返回 `error.MissingAllocator`，分配失败走 error 通道。没有默认的全局分配器；静态节点无需堆分配。IoUring、ThreadPool 初始化与 split 创建 owner 仍显式接收 allocator。
 
-allocator 由调用方借出，不会在 syncWait 返回时自动释放它分配的结果；资源由相应拥有者清理。共享上游使用 shared owner 的 allocator，避免依赖某个短命订阅。具体边界与示例见 [allocator 设计](docs/allocators.md)。
+allocator 由调用方借出，不会在 syncWait 返回时自动释放它分配的结果；资源由相应拥有者清理。共享上游使用 shared owner 的 allocator，避免依赖某个短命订阅。具体边界与示例见 [allocator 设计](docs/allocators.zh-CN.md)。
 
 ## 完整取消回调
 
@@ -155,7 +155,7 @@ defer registration.deinit();
 _ = source.requestStop();
 ```
 
-注册和解除注册线程安全。已经请求停止时 `init` 同步调用回调；`deinit` 等待其他线程正在执行的回调，并支持回调注销/销毁自身。source 与已注册节点保持地址稳定，source 必须活到所有注册解除且 `requestStop` 返回。详见 [取消协议](docs/cancellation.md)。
+注册和解除注册线程安全。已经请求停止时 `init` 同步调用回调；`deinit` 等待其他线程正在执行的回调，并支持回调注销/销毁自身。source 与已注册节点保持地址稳定，source 必须活到所有注册解除且 `requestStop` 返回。详见 [取消协议](docs/cancellation.zh-CN.md)。
 
 取消仍是协作式的：`just` 无条件完成，普通 `then` 不被抢占；长 CPU 任务可通过 `readEnv` 获取 token。io_uring 则用回调唤醒 reactor，提交内核取消请求，无需任务主动轮询。
 
@@ -171,7 +171,7 @@ const values = (try ex.whenAll(.{
 }).syncWait(.{ .allocator = allocator })).?; // .{ 42, 84 }，上游只运行一次
 ```
 
-`split` 分配共享状态但不立即运行。首次订阅启动一次上游，后续订阅共享或重放缓存的 value/error/stopped。owner 不能按普通值复制后分别释放；需要额外 owner 时显式 `clone()`。`.sender()` 是借用视图，owner 至少保持到 operation 启动；启动后的订阅和上游持有自己的引用。任一订阅的取消请求会请求停止整个共享上游。详见 [共享状态与所有权](docs/shared.md)。
+`split` 分配共享状态但不立即运行。首次订阅启动一次上游，后续订阅共享或重放缓存的 value/error/stopped。owner 不能按普通值复制后分别释放；需要额外 owner 时显式 `clone()`。`.sender()` 是借用视图，owner 至少保持到 operation 启动；启动后的订阅和上游持有自己的引用。任一订阅的取消请求会请求停止整个共享上游。详见 [共享状态与所有权](docs/shared.zh-CN.md)。
 
 ## io_uring
 
@@ -194,7 +194,7 @@ _ = n;
 
 context 自带一个 reactor 线程。I/O 完成后的 continuation 默认在该线程运行；CPU 密集任务使用 `.continuesOn(pool.getScheduler())` 转出。`shutdown()` 关闭新提交并取消剩余请求；`deinit()` 等待收尾并释放。取消会等原请求和取消请求的 CQE，避免 buffer 过早释放及地址复用问题。
 
-更多生命周期、SQ 背压、内核要求和错误行为见 [io_uring 后端](docs/io_uring.md)。
+更多生命周期、SQ 背压、内核要求和错误行为见 [io_uring 后端](docs/io_uring.zh-CN.md)。
 
 ## TCP echo 示例
 
@@ -208,7 +208,7 @@ nc 127.0.0.1 9000
 
 这是逐个处理连接的小示例：整个服务是一条 `accept → letValue(连接内 recv/sendAll/repeatEffect 与清理) → repeatEffectUntil` 链，main 最后只调用一次 syncWait。连接内和接受连接的循环都由 zigexec 驱动，callback 内没有阻塞等待。buffer 从执行环境的 allocator 分配，在 EOF/错误/停止后释放，客户端 socket 始终关闭。
 
-`sendAll` 内部用 `repeatEffectUntil` 处理短写；使用 MSG.NOSIGNAL 避免断开的客户端通过 SIGPIPE 终止服务。`zig build test-echo` 验证空连接、1 MiB 二进制/分段输入、半关闭、连接重置和后续重连。循环算法语义见 [重复执行](docs/repeat.md)。
+`sendAll` 内部用 `repeatEffectUntil` 处理短写；使用 MSG.NOSIGNAL 避免断开的客户端通过 SIGPIPE 终止服务。`zig build test-echo` 验证空连接、1 MiB 二进制/分段输入、半关闭、连接重置和后续重连。循环算法语义见 [重复执行](docs/repeat.zh-CN.md)。
 
 ## 结构与扩展
 
@@ -231,9 +231,9 @@ tests/                # 单元、内核集成及 compile_fail 诊断测试
 examples/             # CPU、io_uring 文件流水线与 TCP echo
 ```
 
-自定义 sender 提供 `Values`、`Operation`、`connect(Receiver(Values)) Operation`；operation 提供 `start(*Self) void`。`ex.asSender(custom)` 提供链式方法。每个 operation 只启动一次，启动后保持地址稳定，并恰好发送一次完成。`setValue` 接收 `*const Values`，发布的结果须来自稳定存储。`ex.connect` 返回 `Connection(S)`；根 receiver 只能在 `setFinished` 中回收 connection。自定义异步 sender 必须在提交前 acquire Env.scope，在收尾后 release。详见 [生命周期协议](docs/lifetimes.md)。
+自定义 sender 提供 `Values`、`Operation`、`connect(Receiver(Values)) Operation`；operation 提供 `start(*Self) void`。`ex.asSender(custom)` 提供链式方法。每个 operation 只启动一次，启动后保持地址稳定，并恰好发送一次完成。`setValue` 接收 `*const Values`，发布的结果须来自稳定存储。`ex.connect` 返回 `Connection(S)`；根 receiver 只能在 `setFinished` 中回收 connection。自定义异步 sender 必须在提交前 acquire Env.scope，在收尾后 release。详见 [生命周期协议](docs/lifetimes.zh-CN.md)。
 
-自定义 scheduler 的 `schedule()` 返回空成功 tuple 的 sender。I/O context 的请求协议见 [架构与 stdexec 对应](docs/design.md)。
+自定义 scheduler 的 `schedule()` 返回空成功 tuple 的 sender。I/O context 的请求协议见 [架构与 stdexec 对应](docs/design.zh-CN.md)。
 
 ## 作为依赖
 

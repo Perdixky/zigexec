@@ -1,68 +1,129 @@
-# io_uring 后端
+# io_uring Backend
 
-`ex.IoUring.init(allocator, .{ .entries = 64 })` 创建 context、ring、eventfd 与一个 reactor 线程。所有 SQ/CQ 操作由 reactor 执行，提交者只访问受锁保护的 intrusive 请求队列；取消使用原子标记和 eventfd。无需 `std.Io` 或 liburing，直接使用 Zig 的低层 `std.os.linux.IoUring`。
+**English** | [简体中文](io_uring.zh-CN.md)
 
-## API 与内核需求
+`ex.IoUring.init(allocator, .{ .entries = 64 })` creates a context, ring,
+eventfd, and reactor thread. The reactor performs every SQ/CQ operation;
+submitters only access a lock-protected intrusive request queue. Cancellation
+uses an atomic marker and eventfd. The backend requires neither `std.Io` nor
+liburing and uses Zig's low-level `std.os.linux.IoUring` directly.
 
-`ex.io` 提供 `readSome/writeSome/recv/send/openAt/close/fsync/accept/connect/sleepFor`；这些 sender 依赖 context 协议，不直接依赖 io_uring。
+## API and kernel requirements
 
-context 大小必须为 2 或更大的 2 的幂，受内核 ring 大小限制。初始化要求 `IORING_FEAT_SINGLE_MMAP`（Zig wrapper 要求）与 `IORING_FEAT_NODROP`；应使用支持所需 opcode 的现代 Linux。部署时还须允许 io_uring 系统调用；权限/内核不支持会作为初始化错误返回，不隐式切换到阻塞 I/O。
+`ex.io` provides `readSome`, `writeSome`, `recv`, `send`, `openAt`,
+`close`, `fsync`, `accept`, `connect`, and `sleepFor`. These senders
+depend on the context protocol rather than io_uring itself.
 
-当前在 Linux `7.2.4-arch1-2`、Zig `0.17.0-dev.2127+e90365cd5` 上进行了真实测试。未对旧内核逐版本验证；新 opcode 不可用会通过该操作的错误通道报告。
+The entry count must be a power of two of at least 2 and is subject to kernel
+limits. Initialization requires `IORING_FEAT_SINGLE_MMAP` (required by Zig's
+wrapper) and `IORING_FEAT_NODROP`. Deployment must permit io_uring syscalls.
+Unsupported kernels or permissions return initialization errors; there is no
+implicit fallback to blocking I/O.
 
-常用参数约定：
+The backend is tested on Linux `7.2.4-arch1-2` with Zig
+`0.17.0-dev.2127+e90365cd5`. Older kernels are not tested version by version;
+an unavailable opcode reports through that operation's error channel.
 
-- offset 是 `u64`；`io.current_offset` 表示使用文件的当前偏移。
-- `openAt` 的 flags 是原始 POSIX/Linux `u32` 位掩码，可由 `@bitCast(linux.O{...})` 构造；mode 为权限位。
-- `accept` 成功返回新 fd；`connect` 借用 sockaddr 和长度。
-- `send` 自动加 `MSG_NOSIGNAL`，使断开的连接返回错误而非终止进程。
-- `sleepFor` 使用相对单调时钟纳秒数；超时对应正常完成。
-- `readSome/writeSome/recv/send` 只做一次传输，允许短传输。没有隐含的 read-exact/write-all 循环。
+Common parameter conventions:
 
-## 完成与内存生命周期
+- Offsets are `u64`; `io.current_offset` uses the file's current position.
+- `openAt` flags are raw POSIX/Linux `u32` bits and may be constructed with
+  `@bitCast(linux.O{...})`; mode contains permission bits.
+- `accept` returns a new descriptor; `connect` borrows a sockaddr and length.
+- `send` adds `MSG_NOSIGNAL`, turning a disconnected peer into an error
+  instead of process termination.
+- `sleepFor` takes relative monotonic nanoseconds; expiration is success.
+- Read, write, receive, and send perform one transfer and may be short. There is
+  no implicit read-exact or write-all loop.
 
-buffer、路径、地址和文件描述符必须活到 sender 完成。传输成功发送字节数，open/accept 发送 fd，无值操作发送空 tuple。EOF 是正常的 0 字节成功，内核错误映射为 Zig 错误，例如 `BadFileDescriptor`、`FileNotFound`、`ConnectionReset`；不识别的 errno 为 `UnexpectedIoError`。当前错误通道不携带原始 errno 数值。
+## Completion and memory lifetime
 
-成功获得的 fd 由调用方拥有。`whenAll` 在其他分支失败时会丢弃成功值，而 Zig 不自动析构；不要依赖它自动清理已取得的 fd。安排每个分支自己的资源清理，或用明确的 owner/defer 管理句柄。
+Buffers, paths, addresses, and descriptors must remain valid until completion.
+Transfers send their byte count, open and accept send a descriptor, and
+value-less operations send an empty tuple. EOF is a successful zero-byte read.
+Kernel errors map to Zig errors such as `BadFileDescriptor`, `FileNotFound`,
+and `ConnectionReset`; an unknown errno becomes `UnexpectedIoError`.
 
-operation 嵌入后端 Request，提交与取消不额外分配请求节点。内核仍可能为请求分配资源；这里只承诺库代码不为每个请求显式分配堆节点。
+The caller owns successfully acquired descriptors. If another `whenAll`
+branch fails, a successful value can be discarded, and Zig does not run an
+implicit destructor. Arrange cleanup within each branch or use an explicit
+owner/defer strategy.
 
-## 取消与 CQE 追踪
+Each operation embeds its backend `Request`. Submission and cancellation do
+not allocate request nodes in user space, though the kernel may allocate its own
+resources.
 
-1. sender 启动时注册环境 token 的 stop callback。
-2. callback 标记 `cancel_requested` 并写 eventfd，不接触 SQ/CQ。
-3. 未提交的请求可直接停止；在途请求提交 `ASYNC_CANCEL`。
-4. 原请求和取消请求分别携带 user_data，最低位标识取消 CQE。
-5. 已提交取消时，两个 CQE 全部收齐后才通知 receiver 并释放 Request。
+## Cancellation and CQE tracking
 
-最后一步保证迟到的取消不会引用已被复用的 operation 地址，也保证内核不再借用 buffer。`-ECANCELED` 进入 stopped；若原操作已经成功，仍可发送成功，取消不是抢占或事务回滚。
+1. On start, the sender registers a stop callback on the environment token.
+2. The callback marks `cancel_requested` and writes eventfd; it never touches
+   the SQ or CQ.
+3. An unsubmitted request can stop immediately; an in-flight request receives
+   an `ASYNC_CANCEL` submission.
+4. Original and cancellation requests use separate `user_data` values, with
+   the low bit identifying a cancellation CQE.
+5. Once cancellation is submitted, both CQEs must arrive before the receiver is
+   notified and the request storage is released.
 
-在最终通知前解除 stop callback，因此其他线程上已经开始的取消调用也会收尾。I/O 完成处理持有执行入口，退出后才允许根 receiver 在 setFinished 回收 connection。
+Waiting for both completions prevents a late cancellation from referencing a
+reused operation address and ensures the kernel no longer borrows the buffer.
+`-ECANCELED` becomes stopped. If the original operation already succeeded,
+success may still win; cancellation is neither preemption nor rollback.
 
-## 提交压力与唤醒
+The stop callback is removed before final notification, so cancellation already
+running on another thread is allowed to finish. I/O completion handling retains
+an execution entry, and only its exit permits `setFinished` to retire the root
+connection.
 
-SQ 大小限制一次提交的批次，不限制在途请求数。SQ 满时保留用户请求并先提交现有批次，不伪造 `SubmissionQueueFull` 完成，也不等待挂起读取结束才提交后面的写入/取消。
+## Submission pressure and wakeups
 
-eventfd 的 poll 始终优先保留/重建，避免 ring 满时失去跨线程唤醒能力。请求队列或待提交取消不为空时，继续非阻塞提交批次；没有这些工作时才等待 CQE。
+SQ capacity limits a submission batch, not the number of outstanding requests.
+When the SQ fills, requests remain queued while the current batch is submitted.
+The implementation neither fabricates `SubmissionQueueFull` nor waits for
+pending reads before submitting later writes or cancellations.
 
-要求 NODROP，内核 CQ 满时可保留溢出的完成项；消费 CQ 并刷新溢出队列。取消提交优先于新 I/O，但没有跨请求公平性或有界队列长度承诺：请求节点由使用方的 operation 持有。
+The eventfd poll is always preserved or rebuilt first so cross-thread wakeups
+remain possible under pressure. The reactor continues nonblocking submissions
+while user requests or pending cancellations remain, and waits for a CQE only
+when there is no such work.
 
-## 关闭与错误
+`NODROP` lets the kernel retain overflow completions when the CQ is full. The
+reactor consumes the CQ and flushes overflow. Cancellation submissions take
+priority over new I/O, but there is no fairness or bounded queue-length
+guarantee; request nodes belong to caller operations.
 
-`shutdown()` 可从任意线程调用，包含 reactor 回调：关闭新提交，取消队列中和在途请求，并等待实际完成。此方法自身不 join。
+## Shutdown and errors
 
-`deinit()` 调用 shutdown、join worker、销毁 ring 并关闭 eventfd。不可从 reactor 自身调用；context 必须活到其他线程上的 submit/cancel/shutdown 调用返回。内核不可中断的工作可能延长关闭时间，不能承诺固定的取消延迟。
+`shutdown()` may be called from any thread, including a reactor callback. It
+rejects new submissions, cancels queued and in-flight work, and waits for real
+completion, but does not join the worker.
 
-关闭后的新请求为 `error.ContextClosed`。无效 fd 等常规操作失败走 sender 的 error 通道。`io_uring_enter` 的中断/暂时资源压力会重试；无法恢复的 ring 基础设施损坏会 panic，而不是虚构完成后释放仍被内核使用的 buffer。
+`deinit()` calls shutdown, joins the worker, destroys the ring, and closes
+eventfd. It must not run on the reactor thread. The context must outlive every
+concurrent submit, cancel, or shutdown call. Kernel work that cannot be
+interrupted may extend shutdown indefinitely; no fixed cancellation latency is
+promised.
 
-continuation 默认运行在 reactor 线程。不要在该线程阻塞调用 `syncWait` 等待同一 context；耗时处理应 `continuesOn(cpu_scheduler)`。
+New requests after shutdown receive `error.ContextClosed`. Ordinary operation
+failures use the sender error channel. Interrupted `io_uring_enter` calls and
+temporary resource pressure are retried. Irrecoverable ring infrastructure
+damage panics rather than pretending completion and releasing memory the kernel
+might still use.
 
-## 测试
+Continuations run on the reactor thread by default. Do not block that thread in
+`syncWait` on the same context; move expensive work with
+`continuesOn(cpu_scheduler)`.
 
-`zig build test-io` 独立运行真实内核测试，包括文件内容/EOF、内核错误、定时器、socketpair、loopback connect/accept、在途取消、关闭取消、2 条目 ring 下 128 个读取排队、100 轮地址复用、setFinished 内释放 connection，以及共享 timer 的所有权。测试不会静默跳过受限内核。
+## Tests and complete sends
 
-## 完整发送与 echo
+`zig build test-io` runs real-kernel tests for file content and EOF, kernel
+errors, timers, socket pairs, loopback connect/accept, in-flight and shutdown
+cancellation, 128 queued reads on a two-entry ring, address reuse, connection
+retirement from `setFinished`, and shared-timer ownership. Restricted kernels
+are not silently skipped.
 
-`sendAll(context, fd, buffer, flags)` 是基于普通 send 的组合操作，使用 repeatEffectUntil 重试短写；成功返回 buffer.len，非空写入无进展时报 WriteZero。错误/取消发生前可能已经发送部分数据。该操作借用 buffer 到完成。TCP 客户端异常关闭时可使用 linux.MSG.NOSIGNAL。
-
-可运行的 [TCP echo 示例](../examples/tcp_echo.zig) 使用 repeatEffect 驱动连接内循环，启动命令为 `zig build run-echo -- 9000`，回环测试为 `zig build test-echo`。
+`sendAll(context, fd, buffer, flags)` composes ordinary sends with
+`repeatEffectUntil` to retry short writes. It returns `buffer.len`, reports
+`WriteZero` when a nonempty write makes no progress, and may already have sent
+partial data before an error or cancellation. It borrows the buffer until
+completion. See the runnable [TCP echo example](../examples/tcp_echo.zig).

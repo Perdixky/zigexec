@@ -1,45 +1,62 @@
-# stdexec 研究与库架构
+# stdexec Research and Library Architecture
 
-研究与实现基线：2026-09-18，Zig `0.17.0-dev.2127+e90365cd5`。当前版本为 0.2：从最初的 CPU 任务组合扩展到完整 stop callback、显式共享状态、后端无关 I/O 协议与 io_uring。
+**English** | [简体中文](design.zh-CN.md)
 
-## 标准依据
+Research and implementation baseline: 2026-09-18, Zig
+`0.17.0-dev.2127+e90365cd5`. Version 0.2 expands the original CPU task
+composition library with complete stop callbacks, explicit shared state, a
+backend-independent I/O protocol, and io_uring.
 
-一手资料：
+## Standards basis
 
-- [P2300R10](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p2300r10.html)：sender/receiver、生命周期、调度和取消的设计动机。
-- [当前 C++ 执行库草案](https://eel.is/c++draft/exec)：P2300 合入后的演进。
-- [when_all](https://eel.is/c++draft/exec.when.all)：等待所有输入、拼接值、错误优先与兄弟取消。
-- [continues_on](https://eel.is/c++draft/exec.continues.on)：保存完成后重新调度；调度失败/停止可以替换保存的结果。
-- [NVIDIA/stdexec](https://github.com/NVIDIA/stdexec) 与 [用户指南](https://nvidia.github.io/stdexec/user/)：标准模型参考实现与扩展算法。
+Primary references:
 
-stdexec 实现、P2300 提案与当前 `std::execution` 不是同一个版本的接口集合。本库追求模型和常用语义，不宣称完整标准兼容；`split` 采用本文明确列出的 Zig 所有权/值语义。
+- [P2300R10](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2024/p2300r10.html)
+  for sender/receiver motivation, lifetimes, scheduling, and cancellation.
+- The [current C++ execution draft](https://eel.is/c++draft/exec) after P2300
+  integration.
+- [when_all](https://eel.is/c++draft/exec.when.all) and
+  [continues_on](https://eel.is/c++draft/exec.continues.on) semantics.
+- [NVIDIA/stdexec](https://github.com/NVIDIA/stdexec) and its
+  [user guide](https://nvidia.github.io/stdexec/user/).
 
-## 分层
+stdexec, the P2300 proposal, and the current `std::execution` draft do not
+expose identical API generations. zigexec follows the model and common
+semantics without claiming complete standard conformance. In particular,
+`split` uses the explicit Zig ownership and value semantics documented here.
+
+## Layers
 
 ```mermaid
 flowchart TD
-    A[公开 API 与 fluent sender] --> B[execution: receiver / environment / operation]
-    A --> C[senders 与 algorithms]
-    A --> J[expressions: 子链与输入作用域]
+    A[Public API and fluent senders] --> B[execution: receiver / environment / operation]
+    A --> C[senders and algorithms]
+    A --> J[expressions: subgraphs and input scopes]
     J --> C
     C --> B
     C --> D[cancellation]
     C --> E[schedulers: pool / run loop / inline]
-    A --> F[io: 请求描述与通用 sender]
+    A --> F[io: request descriptions and generic senders]
     F --> B
     F --> D
-    F --> G[context 协议]
+    F --> G[context protocol]
     G --> H[backends/io_uring]
     H --> I[Linux SQ/CQ / eventfd]
 ```
 
-基础 sender、算法、执行上下文各自独立文件。共用的 transform/let 模板在 `algorithms/detail/`，queue/task/sync 在 `detail/`。`root.zig` 只提供公共入口，不收纳算法实现。`tests/` 是独立测试模块，从公开 `zigexec` import 访问库；测试辅助同步独立于库的 futex 实现。
+Base senders, algorithms, and execution contexts live in separate files.
+Shared transform/let templates are under `algorithms/detail/`; queue, task,
+and synchronization helpers are under `detail/`. `root.zig` is a public
+surface rather than an implementation container. Tests import the public
+`zigexec` module, and test synchronization uses an independent futex helper.
 
-`std.Io` 可以是未来的适配后端，不是依赖前提。当前库使用 `std.atomic`、`std.Thread`、`std.mem.Allocator` 和低层 Linux API。
+`std.Io` may become an adapter backend but is not a prerequisite. The current
+implementation uses `std.atomic`, `std.Thread`, `std.mem.Allocator`, and
+low-level Linux APIs.
 
-## 执行协议
+## Execution protocol
 
-Sender 提供：
+A sender provides:
 
 ```zig
 pub const Values = @Tuple(&.{i64});
@@ -47,17 +64,31 @@ pub const Operation = ...;
 pub fn connect(self: Self, receiver: Receiver(Values)) Operation;
 ```
 
-Operation 提供 `start(self: *Operation) void`，只能调用一次。成功、错误、停止恰好选择一个通道；receiver 的方法返回 `void`。用户 receiver 必须通过 `getEnv()` 暴露 Env；Env 的 allocator 和 stop token 均可省略；缺失 allocator 仅在查询时返回 error.MissingAllocator。
+An operation provides `start(self: *Operation) void` and starts once. Exactly
+one of value, error, or stopped is sent, and receiver methods return `void`.
+User receivers expose an `Env` through `getEnv()`. Both allocator and stop
+token are optional; querying a missing allocator returns
+`error.MissingAllocator`.
 
-Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引用的值；`start` 在最终地址原地连接子操作。启动后不可移动/复制。公开 ex.connect 返回 Connection(S)，通过执行作用域把结果完成与存储回收分开：setValue 接收 *const Values，根 receiver 在 setFinished 才能回收。详见 [生命周期协议](lifetimes.md)。
+Zig has no C++ guaranteed copy elision. `connect` returns a value without
+self-references and `start` connects children in their final storage.
+Operations cannot move after start. Public `ex.connect` returns
+`Connection(S)`, whose execution scope separates logical completion from safe
+storage retirement: `setValue` accepts `*const Values`, and a root receiver
+retires the connection only in `setFinished`. See
+[operation lifetimes](lifetimes.md).
 
-`connect` 是不可失败的协议。需要资源分配时在显式构造函数返回错误，或在启动后通过 error 通道报告。未启动的普通 operation 不持有需要析构的资源；Shared view 在 `start` 才取得状态引用。
+`connect` is infallible as a protocol. Explicit constructors may return
+allocation errors, or startup may report failures through the error channel.
+An unstarted ordinary operation owns no resource requiring destruction; a
+shared view retains state only when started.
 
-## Zig API 取舍
+## Zig API choices
 
-链式方法和自由函数共用底层算法。`asSender(custom)` 为自定义 sender 添加 fluent facade；facade 只包含原 sender，没有额外动态节点。
+Fluent methods and free functions use the same underlying algorithms.
+`asSender(custom)` adds a facade containing only the implementation.
 
-| stdexec 风格 | Zig |
+| stdexec style | Zig |
 | --- | --- |
 | `just(a,b)` | `just(.{a,b})` |
 | `then(s,f)` | `s.then(Callback, args)` |
@@ -67,67 +98,120 @@ Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引�
 | `starts_on(sch,s)` | `startsOn(sch,s)` / `s.startsOn(sch)` |
 | `continues_on(s,sch)` | `s.continuesOn(sch)` |
 | `sync_wait(s)` | `s.syncWait(env)` |
-| 共享计算 | `try s.split(allocator)` 与显式 owner |
+| Shared computation | `try s.split(allocator)` plus an explicit owner |
 
-回调参数是编译期 struct 类型，状态通过 tuple 或命名字段显式初始化；call 的 self 可为值或指向 operation 内存储的指针。普通函数用 `Fn(function)` 适配。没有隐式捕获；共享可变状态显式传指针。
+Callbacks are compile-time struct types whose fields are initialized explicitly
+from positional or named arguments. `self` may be a value or a pointer into
+operation storage. `Fn(function)` adapts ordinary functions. Mutable shared
+state uses explicit pointers; there are no implicit captures.
 
-`letValue(body, .{})` 引入输入作用域，body 是带运行时捕获的 deferred 表达式。`upstream()` 绑定最近一层 scope 的完成值并借用其稳定存储；需要稳定的动态 buffer 时，显式分配并传递 slice。callback 工厂仅返回一个 sender，整条子链直接组合并推导。详见 [表达式与生命周期](expressions.md)。
+`letValue(body, .{})` introduces an input scope. The body is a deferred
+expression with runtime captures, and `upstream()` borrows stable completion
+storage from the nearest scope. Dynamic buffers are explicitly allocated and
+passed as slices. Each callback factory returns one sender while the complete
+subgraph is composed and inferred. See [expressions](expressions.md).
 
-每个 sender 有一个静态成功 tuple，错误统一为 `anyerror`，stopped 独立。`syncWait` 返回 `anyerror!?Values`。回调 `void/!void` 成功产生空 tuple，`T/!T` 成功产生单元素 tuple。恢复分支必须保持成功 tuple 类型，异形结果可作为 tagged union 值传递。
+Every sender has one static success tuple, with `anyerror` and stopped as
+separate channels. `syncWait` returns `anyerror!?Values`. Callback
+`void`/`!void` becomes empty success, while `T`/`!T` becomes a
+one-element tuple. Recovery preserves the original success tuple; heterogeneous
+application outcomes can use a tagged union value.
 
-Receiver 的 Values 保留静态类型，context 与三个函数指针进行小范围类型擦除，避免递归 generic receiver 类型。没有基准保证所有间接调用消失，不宣称与 C++ stdexec 性能相同。
+Receivers preserve a static `Values` type while erasing a context and three
+function pointers to avoid recursive generic receiver types. There is no claim
+that all indirect calls disappear or performance equals C++ stdexec.
 
-## 类型构造器与上下文推导
+## Type construction and contextual inference
 
-公开的 `Just/Then/LetValue/WhenAll/StartsOn/...` 与运行时构造器成对，返回包含 fluent 方法的准确具体类型。类型级方法允许 `Just(.{i64}).Then(F).StartsOn(Scheduler)` 的组合。`asSender` 幂等，scheduler 的成员和自由函数形式不会多包装一次而产生不同类型。
+Public `Just`, `Then`, `LetValue`, `WhenAll`, `StartsOn`, and related
+constructors correspond to runtime functions and produce exact concrete types
+with fluent methods. Type-level composition such as
+`Just(.{i64}).Then(F).StartsOn(Scheduler)` is supported. `asSender` is
+idempotent.
 
-`io.ReadSome(Context)` 等 I/O 类型只依赖 context 指针类型和操作种类，不依赖 fd/buffer 的运行时值。`io.For(Context)` 固定一次 context 类型，提供 `Io.ReadSome` 等类型及同名小写函数。
+I/O types such as `io.ReadSome(Context)` depend only on context pointer type
+and operation kind, not runtime descriptors or buffers. `io.For(Context)`
+binds the context once and exposes matching types and lowercase constructors.
 
-回调推导改为使用实际上游参数 tuple：value 使用 `S.Values`，error 使用单个 `anyerror`，stopped 使用空 tuple，bulk 前置 `usize` 索引。泛型 struct `call(self, value: anytype)` 因而可以产生依赖输入类型的返回值；`callTuple(self, args)` 支持任意数量参数。公开算法通过反射检查 call/self、参数数量、输入类型及工厂返回协议；类型相关的错误在组合时报告。
+Callback inference uses actual upstream tuples: `S.Values` for value, one
+`anyerror` for error, no argument for stopped, and a leading `usize` for
+bulk. Generic `call(self, value: anytype)` can therefore return a type based on
+its input; `callTuple` supports arbitrary arity. Reflection checks methods,
+`self`, arity, input types, and factory sender protocols during composition.
 
-`Fn(function)` 把函数身份编码进 callback 类型；需要捕获时优先用 callback 字段。低层 `Bind/bind` 仍可绑定函数前置参数。`meta.ReturnOf` 查询已知函数的返回类型，不执行函数体。
+`Fn` encodes function identity in a callback type. Callback fields are
+preferred for captures; low-level `Bind` can bind prefix arguments.
+`meta.ReturnOf` queries a known function's return type without executing it.
+This is not arbitrary function-body return inference; Zig boundaries still
+require declarations. See the [type API](types.md).
 
-这不等于任意函数体的自动返回类型推导；Zig 的函数边界仍需声明。完整用法与边界见 [类型 API](types.md)。
+## Allocators, composition, and scheduling
 
-## 执行 allocator
+The optional allocator belongs to `Env`; there is no implicit global
+allocator. A sender queries it during `start` and reports a missing allocator
+or allocation failure through the error channel. `whenAll` and
+`withStopToken` override only cancellation state. Static operations remain
+embedded.
 
-allocator 属于 Env。syncWait(sender, env) 显式接收环境，其内部 receiver 通过 getEnv 暴露该环境；不提供默认全局 allocator。sender 在 start 中通过 receiver.getEnv().getAllocator() 获取并处理错误；缺失 allocator 或动态分配失败通过 error 通道报告。whenAll 与 withStopToken 仅覆盖取消 token，保留其余环境字段。静态操作继续直接嵌入 operation。
+A shared upstream has an internal receiver using its owner's allocator.
+`syncWait` does not destroy an implicit arena, and an allocator does not own
+user values. See [allocator semantics](allocators.md).
 
-共享上游有独立的内部 receiver，使用 shared owner 的 allocator。allocator 本身不管理值的所有权，syncWait 也不销毁隐式 arena；拥有型结果可以留给调用方消费与释放。与 stdexec 的对照和本库的显式环境规则见 [allocator 与环境设计](allocators.md)。
+`whenAll` stores branch results separately and publishes them with
+acquire/release atomics. A startup reference prevents a synchronous branch from
+destroying parent state early. CAS records the first observed error; error wins
+over stopped, and every branch is awaited. `whenAll(.{})` is an extra empty
+success identity even though the current C++ draft forbids zero arguments.
 
-## 组合与生命周期
+Stop forwarding can synchronously complete a subgraph, so forwarding callbacks
+retain a temporary reference and unregister parent-token forwarding before
+final notification. See [cancellation](cancellation.md).
 
-`whenAll` 每个子任务独立存储完成结果，通过 acquire/release 原子计数发布。启动阶段持有额外引用，避免同步分支过早完成并释放父状态。错误通过 CAS 记录最先观察到的错误；最终 error 优先于 stopped；总是等待所有分支。
+`startsOn` schedules before starting upstream and controls only the start
+location. `continuesOn` retains a completion, schedules, then forwards it;
+scheduler error or stopped replaces the retained result.
 
-停止转发可能同步完成子图，因此转发回调也持有临时引用，完成路径先解除父 token 注册。详见 [取消协议](cancellation.md)。
+`ThreadPool` allocates its context and thread array once, while queue nodes
+live in operations. `RunLoop.finish` drains existing submissions and rejects
+new ones. A downstream reschedule during shutdown can therefore fail; normal
+shutdown first waits for the root sender.
 
-`whenAll(.{})` 是本库额外提供的空成功恒等元；当前 C++ 草案禁止零参数 `when_all`，此处不宣称标准一致。
+## Shared state and the I/O context protocol
 
-`startsOn` 相当于 schedule 后 letValue 启动上游，只保证启动位置；内部异步 sender 仍可改变完成线程。`continuesOn` 暂存三个完成通道，再调度并转发；调度本身的 error/stopped 优先。
+Shared-owner, started-subscription, and upstream-execution references are
+independent. Subscriptions and the cache are registered under a lock, while
+start and notification occur outside it. Cancellation temporarily retains
+state. Ordinary copying does not increment references; owners use `clone()`
+and views remain borrowed. See [shared senders](shared.md).
 
-`ThreadPool` 一次性分配 context 与线程数组，队列节点存在 operation 内。`RunLoop.finish` 排空已有提交并拒绝新提交；关闭时后续阶段若再调度可能失败，因此正常路径应先等根 sender 完成。
+`io/request.zig` defines backend-independent POSIX descriptions and completion
+results. `io/sender.zig` implements connection, token registration, and typed
+completion. A context supplies:
 
-## 共享状态
+- An associated `Request` with `description`, `context`, and `complete`
+  fields; backend fields may have defaults.
+- `submit(self, request)`: thread-safe, nonblocking with respect to result,
+  exactly-once completion, possibly synchronous.
+- `cancel(self, request)`: thread-safe and permitted before submit, but only a
+  request for cancellation. It must not complete before submit because the
+  sender is still installing its stop registration.
+- Completion only after the external system no longer borrows the request or
+  user memory, with no node access after completion.
 
-Shared owner 的引用、启动后的订阅引用、上游执行引用相互独立。锁内登记订阅/缓存结果，锁外启动与通知；一次上游可以服务并发及迟到的订阅。取消请求保留临时引用，防止 source 在 dispatch 中被释放。
+io_uring embeds backend state in `Request`; separate submission and completion
+modules encode SQEs and decode CQEs. Storage can be released only after both the
+target and cancellation CQEs arrive. See the [io_uring backend](io_uring.md).
 
-普通 Zig 复制不增加引用计数，owner 必须用 `clone()`；view 是借用值。缓存采用值复制，资源没有隐式深拷贝或析构。详见 [共享状态](shared.md)。
+## Current boundaries
 
-## I/O context 协议
+`letValue` retains upstream operations and factory state while borrowing
+inputs. The root connection remains until execution entries exit. External
+pointers, slices, and handles are borrowed by default; scopes do not extend
+factory locals or external resources. Zig values have no implicit destructor,
+so algorithms never call `deinit` for discarded application values.
 
-`io/request.zig` 定义后端无关的 POSIX 请求描述与 value/error/stopped 结果，`io/sender.zig` 处理连接、token 注册、类型化完成。每种 I/O 操作的公开构造器独立位于 `io/operations/`。
-
-Context 类型需要：
-
-- 关联 `Request` 类型，含 `description`、`context`、`complete` 字段，其他字段可具有后端自己的默认值。
-- `submit(self, request)`：线程安全，不阻塞等待结果，恰好完成一次；可同步完成。
-- `cancel(self, request)`：线程安全，允许在 submit 前发生，只请求取消。**submit 前不能调用完成**，因为 sender 此时尚在安装取消注册。
-- 完成函数只能在内核/外部系统不再借用 request 和用户内存后调用。完成后不能再解引用节点。
-
-io_uring 将后端状态嵌入 Request，单独的 submission/completion 模块编码 SQE 与解码 CQE，context 负责队列、唤醒、取消以及关闭。目标 CQE 与取消 CQE 都收齐后才允许释放节点。详见 [io_uring 后端](io_uring.md)。
-
-## 当前边界
-
-`letValue` 保留上游 operation 和工厂状态，借用其输入；整个根 connection 保留到执行入口退出；已有 sender 形式按顺序启动子任务，deferred 形式绑定最近一层输入。所有外部指针/slice/句柄默认借用；scope 不延长工厂栈局部变量或外部资源的生命周期，内部借用不得越过所属 operation 的销毁。资源清理由调用方显式安排。析构不是 Zig 值的隐式行为，组合算法不会自动对丢弃的用户值调用 `deinit`。
-
-尚未提供环境作用域恢复的 `on`、`whenAny`、通用 timeout 组合、`async_scope`、共享状态自定义值析构策略、协程/GPU 或其他平台后端。下一步可以基于已有取消注册与 I/O 协议实现这些能力，而不必改写核心生命周期模型。
+Environment-restoring `on`, `whenAny`, general timeout composition,
+`async_scope`, custom shared-result destruction, coroutine/GPU integration,
+and other platform backends are not yet implemented. The existing cancellation
+registration and I/O protocols are intended to support those additions without
+replacing the core lifetime model.
