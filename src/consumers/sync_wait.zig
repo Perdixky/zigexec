@@ -1,44 +1,40 @@
 const c = @import("../execution/protocol.zig");
-const sync = @import("../detail/sync.zig");
+const RunLoop = @import("../schedulers/run_loop.zig").RunLoop;
+const StartScheduler = @import("../schedulers/start_scheduler.zig");
 
-/// Wait for completion AND quiescence. The result is borrowed within the root
-/// connection until its execution entries finish, then copied out once.
+/// Wait for completion AND retirement while driving a caller-thread run loop.
+/// Supplies getStartScheduler when absent, so asynchronous join can resume here.
 pub fn syncWait(sender: anytype, env: c.Env) anyerror!?@TypeOf(sender).Values {
     const Values = @TypeOf(sender).Values;
     const State = struct {
-        mutex: sync.Mutex = .{},
-        ready: sync.Condition = .{},
-        done: bool = false,
+        loop: *RunLoop,
         result: c.CompletionRef(Values) = undefined,
         env: c.Env,
-        const Self = @This();
-        pub fn getEnv(self: *Self) c.Env {
+        pub fn getEnv(self: *@This()) c.Env {
             return self.env;
         }
-        pub fn setFinished(self: *Self) void {
-            self.mutex.lock();
-            self.done = true;
-            self.ready.signal();
-            self.mutex.unlock();
+        pub fn setFinished(self: *@This()) void {
+            self.loop.finish();
         }
-        pub fn setValue(self: *Self, values: *const Values) void {
+        pub fn setValue(self: *@This(), values: *const Values) void {
             self.result = .{ .value = values };
         }
-        pub fn setError(self: *Self, err: anyerror) void {
+        pub fn setError(self: *@This(), err: anyerror) void {
             self.result = .{ .err = err };
         }
-        pub fn setStopped(self: *Self) void {
+        pub fn setStopped(self: *@This()) void {
             self.result = .stopped;
         }
     };
-    var state: State = .{ .env = env };
+    var loop: RunLoop = .{};
+    const scheduler = loop.getScheduler();
+    var wait_env = env;
+    if (wait_env.start_scheduler == null) wait_env.start_scheduler = StartScheduler.init(&scheduler);
+    var state: State = .{ .loop = &loop, .env = wait_env };
     var operation = c.connect(sender, &state);
     operation.start();
-    state.mutex.lock();
-    while (!state.done) state.ready.waitForSignal(&state.mutex);
-    const result = state.result;
-    state.mutex.unlock();
-    return switch (result) {
+    loop.run();
+    return switch (state.result) {
         .value => |values| values.*,
         .err => |err| err,
         .stopped => null,

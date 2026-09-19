@@ -132,7 +132,8 @@ sender. Zig still requires declared return types at function boundaries.
 | Asynchronous factories/recovery | `.letValue(Factory, args)`, `.letError(Factory, args)`, `.letStopped(Factory, args)` |
 | Sub-pipelines/sequencing | `.letValue(body, .{})`, `.letValue(child, .{})` |
 | Repetition | `.repeatEffect()`, `.repeatEffectUntil()` |
-| Concurrent join | `whenAll(.{a, b, ...})` |
+| Concurrent results | `whenAll(.{a, b, ...})` → concatenated arguments, `whenAny(.{ .a = a, .b = b })` → union |
+| Scope association | `.associate(token)` → owner with `.sender()`, `.takeSender()`, `.deinit()` |
 | Indexed execution | `.bulk(count, Callback, args)` |
 | Execution contexts | `ThreadPool`, `RunLoop`, `InlineScheduler`, `IoUring` |
 | Scheduling | `scheduler.schedule()`, `.startsOn(scheduler)`, `.continuesOn(scheduler)` |
@@ -144,7 +145,10 @@ sender. Zig still requires declared return types at function boundaries.
 `try`/`catch`, and stopped is `null`. An empty tuple is distinct from stopped.
 `whenAll` waits for every branch; on failure it requests cancellation of its
 siblings and waits for cleanup. Errors take precedence over stopped, and the
-first observed error is reported.
+first observed error is reported. Success passes concatenated arguments downstream; `syncWait` returns them as a tuple.
+`whenAny` selects the first completion, cancels peers, and waits for every branch
+to retire; success passes a tagged union of branch completion tuples. See
+[concurrent result shapes](docs/combinators.md).
 
 ## Execution environment and cancellation
 
@@ -231,10 +235,23 @@ zig build run-echo -- 9000
 nc 127.0.0.1 9000
 ```
 
-The example is one composed chain: `accept`, a per-connection
-`recv`/`sendAll`/`repeatEffect` loop with cleanup, then `repeatEffectUntil`.
-Callbacks never block waiting for an operation. `MSG_NOSIGNAL` prevents a
-disconnected client from terminating the process through `SIGPIPE`.
+The example has one accept loop. Each accepted socket immediately spawns an
+independent `recv`/`sendAll`/`repeatEffect` child using the same io_uring scheduler.
+`CountingScope` tracks child associations; `ex.spawn` reclaims each operation after `setFinished`;
+each child has its own 16 KiB buffer. `ex.runInScope(&scope, accept_loop)` drains the children
+before the single final `syncWait` returns. `--once` accepts one client and waits
+for its echo task to finish. Callbacks do not block; `MSG_NOSIGNAL` prevents
+`SIGPIPE` from terminating the server.
+
+`zig build test-echo` checks 32 simultaneous clients plus an idle client, binary
+and fragmented transfers, half-close, reset/reconnect, and `--once` draining.
+See [dynamic task scopes](docs/counting_scopes.md) for ownership and cancellation.
+
+`SimpleCountingScope` provides association counting; `CountingScope` adds stop
+requests. `join()` keeps admission open while associations remain; `close()` and
+`requestStop()` are independent. `spawn(sender, token, env)` requires explicit
+allocation and compile-time error handling. Scope join never aggregates child
+errors. `runInScope` is the separate producer cleanup policy used by the example.
 
 ## Use as a dependency
 
@@ -253,7 +270,7 @@ exe.root_module.addImport("zigexec", dep.module("zigexec"));
 
 The project is not a complete C++26 implementation. Each sender has one static
 success tuple, errors use `anyerror`, and `on` environment restoration,
-`whenAny`, `async_scope`, GPU integration, coroutine integration, additional
+full P3149 async-scope APIs (including `spawnFuture`), GPU integration, coroutine integration, additional
 platform backends, and comprehensive benchmarks are not yet provided.
 
 ## Operation lifetimes
@@ -278,6 +295,8 @@ The complete bilingual design notes cover:
 - [Architecture and stdexec correspondence](docs/design.md)
 - [Expressions and lifetimes](docs/expressions.md)
 - [Type API](docs/types.md)
+- [Concurrent tuple and union results](docs/combinators.md)
+- [Counting scopes and associations](docs/counting_scopes.md)
 - [Allocator and environment semantics](docs/allocators.md)
 - [Cancellation](docs/cancellation.md)
 - [Shared state and ownership](docs/shared.md)

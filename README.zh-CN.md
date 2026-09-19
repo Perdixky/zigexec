@@ -113,7 +113,8 @@ Zig 仍要求函数边界声明返回类型，库不能提供任意函数体的 
 | 异步工厂/恢复 | `.letValue(Factory, args)`、`.letError(Factory, args)`、`.letStopped(Factory, args)` |
 | 子链/顺序执行 | `.letValue(body, .{})` 绑定 `upstream()` 子链；`.letValue(child, .{})` 顺序启动已有 sender |
 | 重复执行 | `.repeatEffect()`、`.repeatEffectUntil()` |
-| 并发汇合 | `whenAll(.{a, b, ...})` |
+| 并发结果 | `whenAll(.{a, b, ...})` → 拼接完成参数，`whenAny(.{ .a = a, .b = b })` → union |
+| scope 关联 | `.associate(token)` → owner，通过 `.sender()` / `.takeSender()` 组合，`.deinit()` 释放 |
 | 逐索引执行 | `.bulk(count, Callback, args)` |
 | 执行上下文 | `ThreadPool`、`RunLoop`、`InlineScheduler`、`IoUring` |
 | 调度 | `scheduler.schedule()`、`.startsOn(scheduler)`、`.continuesOn(scheduler)` |
@@ -123,7 +124,9 @@ Zig 仍要求函数边界声明返回类型，库不能提供任意函数体的 
 
 `syncWait` 返回 `anyerror!?Sender.Values`：成功为 tuple，错误使用 `try/catch`，stopped 为 `null`。空 tuple 与 stopped 不同，`error.Canceled` 不自动转换成 stopped。恢复算法须保持原 sender 的成功 tuple 类型；多值恢复用 `letError/letStopped`。
 
-`whenAll` 等待所有分支，成功时按输入顺序拼接，失败时请求兄弟任务停止并等它们收尾；最终 error 优先于 stopped，报告最先观察到的错误。分支调度到线程池才产生并行，`bulk` 本身是顺序执行。
+`whenAll` 等待所有分支，成功时按输入顺序拼接完成参数传给下游（`syncWait` 将它们打包为返回 tuple），失败时请求兄弟任务停止并等它们收尾；最终 error 优先于 stopped，报告最先观察到的错误。分支调度到线程池才产生并行，`bulk` 本身是顺序执行。
+
+`whenAny` 选择最先完成的通道，取消其他分支并等所有分支执行退出；成功时传一个 tagged union，payload 为对应分支的完成 tuple。详见 [并发结果](docs/combinators.zh-CN.md) 和 [scope 关联](docs/counting_scopes.zh-CN.md)。
 
 `startsOn` 移动上游的启动位置；`continuesOn` 移动下游完成通知。调度失败/取消可以替换上游的完成。`syncWait` 阻塞当前线程，不自动驱动外部 run loop；不要在 reactor 内阻塞等待自身 I/O，也不要耗尽池线程等待同一池的后续工作。
 
@@ -206,9 +209,20 @@ nc 127.0.0.1 9000
 
 实现见 [examples/tcp_echo.zig](examples/tcp_echo.zig)。默认端口为 9000，传 0 由内核选择空闲端口；可用 `--once` 在一个连接结束后退出，例如 `zig build run-echo -- 9000 --once`。
 
-这是逐个处理连接的小示例：整个服务是一条 `accept → letValue(连接内 recv/sendAll/repeatEffect 与清理) → repeatEffectUntil` 链，main 最后只调用一次 syncWait。连接内和接受连接的循环都由 zigexec 驱动，callback 内没有阻塞等待。buffer 从执行环境的 allocator 分配，在 EOF/错误/停止后释放，客户端 socket 始终关闭。
+服务只有一条 accept 循环，每次接入立即 spawn 独立的 `recv → sendAll → repeatEffect`
+echo 子链，所有子链使用同一个 io_uring 调度器。每条子链的 operation 拥有独立的
+16 KiB buffer，`CountingScope` 跟踪关联，独立的 `ex.spawn` 在 `setFinished` 后回收子任务。
+`ex.runInScope(&scope, accept_loop)` 管理接入与排空，main 最后只调用一次 syncWait；
+`--once` 接入一个连接后等待其子链正常结束。callback 内没有阻塞等待。
 
-`sendAll` 内部用 `repeatEffectUntil` 处理短写；使用 MSG.NOSIGNAL 避免断开的客户端通过 SIGPIPE 终止服务。`zig build test-echo` 验证空连接、1 MiB 二进制/分段输入、半关闭、连接重置和后续重连。循环算法语义见 [重复执行](docs/repeat.zh-CN.md)。
+`sendAll` 处理短写，`MSG.NOSIGNAL` 避免 SIGPIPE。`zig build test-echo` 验证
+32 个同时收发的客户端加一个空闲连接、1 MiB 二进制/分段输入、半关闭、重置、重连
+和 `--once` 排空。作用域 API 见 [动态子任务](docs/counting_scopes.zh-CN.md)。
+
+`SimpleCountingScope` 负责关联计数，`CountingScope` 增加停止请求。
+join 等待期间只要还存在关联就允许继续 spawn；`close()` 与 `requestStop()` 独立。
+`spawn(sender, token, env)` 显式提供 allocator，并在编译期要求子链处理全部错误。
+scope 不汇总子任务错误；示例的生产任务收尾策略由独立 `runInScope` 提供。
 
 ## 结构与扩展
 
@@ -218,10 +232,11 @@ src/
   callbacks/           # 显式捕获初始化、编译期函数适配
   expressions/         # deferred 子链与词法输入绑定
   cancellation/        # source、token、callback
+  scopes/              # simple/counting scope、关联与异步 join
   senders/             # 每种基础 sender 独立文件
   algorithms/          # 每种组合算法独立文件；共用模板放 detail/
   schedulers/          # inline、run loop、线程池
-  consumers/           # syncWait
+  consumers/           # syncWait、spawn
   io/                  # 后端无关的请求描述与 I/O sender
   backends/io_uring/   # reactor、请求状态、SQE 编码、CQE 解码
   detail/              # 内部队列、同步、生命周期辅助
@@ -250,7 +265,7 @@ const dep = b.dependency("zigexec", .{ .target = target, .optimize = optimize })
 exe.root_module.addImport("zigexec", dep.module("zigexec"));
 ```
 
-当前仍不是完整的 C++26 标准实现：每个 sender 只有一个成功 tuple 类型，错误统一为 `anyerror`；尚无 `on` 环境恢复、`whenAny`、`async_scope`、GPU 与协程互操作。共享结果使用 Zig 值复制，没有隐式 RAII 或深拷贝。跨平台后端、性能基准和 sanitizer 验证尚待补充。
+当前仍不是完整的 C++26 标准实现：每个 sender 只有一个成功 tuple 类型，错误统一为 `anyerror`；尚无 `on` 环境恢复、完整 P3149 async-scope API（包括 `spawnFuture`）、GPU 与协程互操作。共享结果使用 Zig 值复制，没有隐式 RAII 或深拷贝。跨平台后端、性能基准和 sanitizer 验证尚待补充。
 
 ## 许可证
 

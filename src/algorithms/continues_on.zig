@@ -1,3 +1,4 @@
+const traits = @import("../detail/completion_traits.zig");
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 const schedule = @import("../execution/schedule.zig").schedule;
@@ -7,6 +8,7 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
         sender: S,
         scheduler: Scheduler,
         pub const Values = S.Values;
+        pub const can_error = traits.canError(S) or traits.canError(ScheduledSender);
         const Self = @This();
         pub const Operation = struct {
             sender: S,

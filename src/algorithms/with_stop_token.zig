@@ -1,3 +1,4 @@
+const traits = @import("../detail/completion_traits.zig");
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 const retainUnlessDone = @import("../detail/lifetime.zig").retainUnlessDone;
@@ -7,6 +8,7 @@ pub fn WithStopToken(comptime S: type) type {
         sender: S,
         token: c.StopToken,
         pub const Values = S.Values;
+        pub const can_error = traits.canError(S);
         const Self = @This();
         pub const Operation = struct {
             sender: S,

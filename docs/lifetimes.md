@@ -56,7 +56,9 @@ pub const Operation = struct {
 `upstream()` borrow upstream results instead of copying inputs or constructing
 a `just` sender containing the same tuple. `continuesOn` and
 `withStopToken` retain result pointers. `whenAll` retains branch pointers and
-constructs one contiguous final tuple after every branch succeeds.
+constructs contiguous completion-argument storage after every branch succeeds.
+Callbacks receive its elements as separate arguments; `syncWait` copies the
+argument tuple out as its return value.
 
 `split` is a separate ownership boundary: shared state contains a cache, and
 each subscription operation stores its own result so asynchronous downstream
@@ -148,3 +150,14 @@ was removed.
 zig run -O ReleaseSafe --dep zigexec \
   -Mroot=tests/codegen/operation_layout.zig -Mzigexec=src/root.zig
 ```
+
+
+## Associations and branch retirement
+
+`associate` registers a release action in the current execution scope. At idle,
+the dispatcher extracts actions before `setFinished` can free operation records,
+then releases counting-scope associations afterwards. `whenAny` observes each
+branch's execution retirement independently, but forwards its association records
+to the enclosing scope so asynchronous downstream consumers remain protected.
+`repeatEffect` iterations have their own storage-reuse boundary. See
+[counting scopes](counting_scopes.md) and [concurrent results](combinators.md).

@@ -1,3 +1,4 @@
+const traits = @import("../detail/completion_traits.zig");
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 pub fn Bulk(comptime S: type, comptime F: type) type {
@@ -8,6 +9,7 @@ pub fn Bulk(comptime S: type, comptime F: type) type {
         count: usize,
         callback: F,
         pub const Values = S.Values;
+        pub const can_error = traits.canError(S) or traits.fallible(c.CheckedResult(F, Args, "bulk"));
         const Self = @This();
         pub const Operation = struct {
             sender: S,

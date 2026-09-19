@@ -127,3 +127,9 @@ are not silently skipped.
 `WriteZero` when a nonempty write makes no progress, and may already have sent
 partial data before an error or cancellation. It borrows the buffer until
 completion. See the runnable [TCP echo example](../examples/tcp_echo.zig).
+
+The echo server uses one accept loop and dynamically spawns one child per socket.
+All children start with `schedule(context.getScheduler())` and share the context;
+each owns a separate buffer. [CountingScope](counting_scopes.md) tracks associations and joins asynchronously;
+`ex.spawn` owns and reclaims each task. `--once` stops accepting after one spawn and drains
+that child. The echo tests include 32 simultaneous clients plus an idle client.

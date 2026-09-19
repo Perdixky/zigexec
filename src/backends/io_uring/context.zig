@@ -7,6 +7,7 @@ const submitter = @import("submission.zig");
 const decode = @import("completion.zig").decode;
 const schedule_sender = @import("../../io/operations/nop.zig").schedule;
 const Context = @This();
+const Task = @import("../../detail/task.zig").Task;
 pub const Request = @import("request.zig");
 pub const Options = struct { entries: u16 = 64 };
 
@@ -18,6 +19,8 @@ mutex: sync.Mutex = .{},
 closing: bool = false,
 queue_head: ?*Request = null,
 queue_tail: ?*Request = null,
+task_head: ?*Task = null,
+task_tail: ?*Task = null,
 // Fields below belong to the reactor thread.
 active: ?*Request = null,
 active_count: usize = 0,
@@ -62,6 +65,10 @@ pub fn deinit(self: *Context) void {
 
 pub const Scheduler = struct {
     context: *Context,
+    /// Allocation-free enqueue used by Env's type-erased start scheduler.
+    pub fn submit(self: Scheduler, task: *Task) error{ContextClosed}!void {
+        return self.context.submitTask(task);
+    }
     pub fn schedule(self: Scheduler) @TypeOf(schedule_sender(self.context)) {
         return schedule_sender(self.context);
     }
@@ -83,6 +90,31 @@ pub fn submit(self: *Context, request: *Request) void {
     self.queue_tail = request;
     self.mutex.unlock();
     self.wake();
+}
+
+fn submitTask(self: *Context, task: *Task) error{ContextClosed}!void {
+    self.mutex.lock();
+    if (self.closing) {
+        self.mutex.unlock();
+        return error.ContextClosed;
+    }
+    task.next = null;
+    if (self.task_tail) |tail| tail.next = task else self.task_head = task;
+    self.task_tail = task;
+    self.mutex.unlock();
+    self.wake();
+}
+fn runTasks(self: *Context) void {
+    self.mutex.lock();
+    var next = self.task_head;
+    self.task_head = null;
+    self.task_tail = null;
+    self.mutex.unlock();
+    // Take one batch so reentrant submissions cannot starve kernel completions.
+    while (next) |task| {
+        next = task.next;
+        task.run(task);
+    }
 }
 
 pub fn cancel(self: *Context, request: *Request) void {
@@ -162,6 +194,7 @@ fn enter(self: *Context, wait: u32) void {
 fn run(self: *Context) void {
     var cqes: [64]linux.io_uring_cqe = undefined;
     while (true) {
+        self.runTasks();
         const closing = self.isClosing();
         // Reserve/rearm the wake poll BEFORE filling the SQ. Never block in
         // io_uring_enter without a wake poll, even if submission was partial.
@@ -206,7 +239,11 @@ fn run(self: *Context) void {
             self.active = request;
             self.active_count += 1;
         }
-        if (closing and self.active_count == 0) break;
+        if (closing and self.active_count == 0) {
+            // A submission may have raced the batch snapshot before shutdown.
+            self.runTasks();
+            break;
+        }
         // SQ capacity limits each batch, not the number of in-flight operations.
         // Flush pending batches without waiting for blocking reads to complete.
         self.enter(if (pending_cancels or self.hasQueued()) 0 else 1);

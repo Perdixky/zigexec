@@ -68,3 +68,8 @@ continuation 默认运行在 reactor 线程。不要在该线程阻塞调用 `sy
 `sendAll(context, fd, buffer, flags)` 是基于普通 send 的组合操作，使用 repeatEffectUntil 重试短写；成功返回 buffer.len，非空写入无进展时报 WriteZero。错误/取消发生前可能已经发送部分数据。该操作借用 buffer 到完成。TCP 客户端异常关闭时可使用 linux.MSG.NOSIGNAL。
 
 可运行的 [TCP echo 示例](../examples/tcp_echo.zig) 使用 repeatEffect 驱动连接内循环，启动命令为 `zig build run-echo -- 9000`，回环测试为 `zig build test-echo`。
+
+服务只有一个 accept 循环，每次接入 spawn 独立 echo 子链；各子链以
+`schedule(context.getScheduler())` 开始，共用同一个 context，各自持有 buffer。
+[CountingScope](counting_scopes.zh-CN.md) 负责关联计数与异步 join，`ex.spawn` 负责子任务回收；`--once` 接入一个连接后
+等待其子链结束。回环测试包括 32 个并发客户端以及一个保持空闲的连接。

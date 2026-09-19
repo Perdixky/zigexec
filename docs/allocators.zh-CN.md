@@ -51,7 +51,7 @@ const bytes = allocator.alloc(u8, size) catch |err| {
 };
 ```
 
-动态分配在 start 后发生，失败走 error 通道。connect 仍不分配执行资源且不可失败。自定义 receiver 缺少 getEnv 会在编译期报错；`getEnv` 可以返回空环境 `.{}`。由于 Env 是固定结构，allocator 是否存在为运行时信息，缺失查询在运行时报告，而不是编译期报错。
+惰性 sender 的动态分配在 start 后发生，失败走 error 通道。立即执行的 spawn 在调用时分配，分配错误直接返回。connect 仍不分配执行资源且不可失败。自定义 receiver 缺少 getEnv 会在编译期报错；`getEnv` 可以返回空环境 `.{}`。由于 Env 是固定结构，allocator 是否存在为运行时信息，缺失查询在运行时报告，而不是编译期报错。
 
 普通链节点转发整个环境。whenAll 与 withStopToken 仅覆盖取消 token，保留 allocator；调度、then、三种形式及嵌套的 letValue、repeat 等也保留环境。
 
@@ -95,4 +95,10 @@ ThreadPool 和 IoUring context 可以服务多条链，它们的初始化与销�
 
 已显式传入 allocator 的 syncWait 调用不需要改。自定义 sender 的 `getAllocator()` 查询需要处理 `error.MissingAllocator`；直接读取 `env.allocator` 时需要处理 optional。仅需观察环境而不分配的代码可以保留 null。
 
-TCP echo 示例仍通过 readAllocator 分配每个连接的 16 KiB buffer，因此它的 syncWait 仍提供 allocator。普通 read/recv 等 I/O sender 使用调用方的 buffer，其任务环境可省略 allocator；后端 context 的初始化仍显式提供独立 allocator。
+TCP echo 示例将 allocator 传给 `spawn(sender, token, env)`，分配每个子任务的 operation，
+16 KiB buffer 内嵌其中。counting scope 本身无需 allocator，最终 `syncWait(.{})` 也无需分配。
+后端 context 初始化仍使用自身的显式 allocator。
+
+`Env.start_scheduler` 是可选的借用调度器句柄；缺省时 syncWait 提供并驱动当前线程的
+RunLoop，让异步 counting scope join 回到等待线程。这个默认调度器不会填充 Env.allocator。
+详见 [计数作用域](counting_scopes.zh-CN.md)。

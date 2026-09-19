@@ -22,6 +22,9 @@ const initCallback = @import("callbacks/init.zig").init;
 pub const LetError = types.LetError;
 pub const LetStopped = types.LetStopped;
 pub const WhenAll = types.WhenAll;
+pub const WhenAny = types.WhenAny;
+pub const Associated = @import("algorithms/associate.zig").Associated;
+pub const associate = @import("algorithms/associate.zig").associate;
 pub const Bulk = types.Bulk;
 pub const RepeatEffect = types.RepeatEffect;
 pub const RepeatEffectUntil = types.RepeatEffectUntil;
@@ -41,15 +44,24 @@ pub const Completion = core.Completion;
 pub const Receiver = core.Receiver;
 pub const Connection = @import("execution/connect.zig").Connection;
 pub const Scope = core.Scope;
+pub const SimpleCountingScope = @import("scopes/simple_counting_scope.zig");
+pub const CountingScope = @import("scopes/counting_scope.zig");
+pub const runInScope = @import("algorithms/run_in_scope.zig").runInScope;
+pub fn RunInScope(comptime S: type) type {
+    return Sender(@import("algorithms/run_in_scope.zig").RunInScope(S));
+}
+pub const spawn = @import("consumers/spawn.zig").spawn;
+pub const StartScheduler = @import("schedulers/start_scheduler.zig");
+pub const ScheduleTask = @import("detail/task.zig").Task;
 pub const connect = core.connect;
 pub const start = core.start;
-pub fn just(values: anytype) Immediate(@import("detail/tuple.zig").ValueTuple(@TypeOf(values))) {
+pub fn just(values: anytype) Just(@typeInfo(@import("detail/tuple.zig").ValueTuple(@TypeOf(values))).@"struct".field_types) {
     return asSender(@import("senders/just.zig").just(values));
 }
-pub fn justError(comptime ValueTuple: type, err: anyerror) Immediate(ValueTuple) {
+pub fn justError(comptime ValueTuple: type, err: anyerror) JustError(@typeInfo(ValueTuple).@"struct".field_types) {
     return asSender(@import("senders/just_error.zig").justError(ValueTuple, err));
 }
-pub fn justStopped(comptime ValueTuple: type) Immediate(ValueTuple) {
+pub fn justStopped(comptime ValueTuple: type) JustStopped(@typeInfo(ValueTuple).@"struct".field_types) {
     return asSender(@import("senders/just_stopped.zig").justStopped(ValueTuple));
 }
 pub fn readAllocator() ReadAllocator {
@@ -85,6 +97,9 @@ pub fn letStopped(sender: anytype, comptime Callback: type, args: anytype) LetSt
 pub fn whenAll(senders_tuple: anytype) WhenAll(@typeInfo(@TypeOf(senders_tuple)).@"struct".field_types) {
     const Tuple = Values(@typeInfo(@TypeOf(senders_tuple)).@"struct".field_types);
     return asSender(@import("algorithms/when_all.zig").whenAll(@as(Tuple, senders_tuple)));
+}
+pub fn whenAny(senders: anytype) WhenAny(@TypeOf(senders)) {
+    return asSender(@import("algorithms/when_any.zig").whenAny(senders));
 }
 pub fn bulk(sender: anytype, count: usize, comptime Callback: type, args: anytype) Bulk(@TypeOf(sender), Callback) {
     return asSender(@import("algorithms/bulk.zig").bulk(sender, count, initCallback(Callback, args)));

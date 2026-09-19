@@ -11,10 +11,14 @@ pub fn Immediate(comptime Values: type) type {
     return Sender(@import("senders/immediate.zig").Immediate(Values));
 }
 pub fn Just(comptime value_types: anytype) type {
-    return Immediate(meta.Values(value_types));
+    return Sender(@import("senders/immediate.zig").ImmediateKind(meta.Values(value_types), .value));
 }
-pub const JustError = Just;
-pub const JustStopped = Just;
+pub fn JustError(comptime value_types: anytype) type {
+    return Sender(@import("senders/immediate.zig").ImmediateKind(meta.Values(value_types), .err));
+}
+pub fn JustStopped(comptime value_types: anytype) type {
+    return Sender(@import("senders/immediate.zig").ImmediateKind(meta.Values(value_types), .stopped));
+}
 pub const ReadEnv = Sender(@import("senders/read_env.zig").ReadEnv);
 pub const ReadAllocator = Sender(@import("senders/read_allocator.zig").ReadAllocator);
 
@@ -61,4 +65,9 @@ pub fn RepeatEffect(comptime S: type) type {
 }
 pub fn RepeatEffectUntil(comptime S: type) type {
     return Sender(@import("algorithms/repeat_effect.zig").Repeat(S, true));
+}
+
+/// Input container type preserves tuple indices or named branch tags.
+pub fn WhenAny(comptime Senders: type) type {
+    return Sender(@import("algorithms/when_any.zig").WhenAny(Senders));
 }

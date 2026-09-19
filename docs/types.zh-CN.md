@@ -129,3 +129,10 @@ deferred body 没有独立的 Values；可在知道输入 tuple 后通过 `@Type
 查询不执行函数体。需要具体 comptime 参数值才能特化的工厂不能只用参数类型查询；先固定该参数或使用显式类型构造器。
 
 Zig 的函数边界仍需声明返回类型，库不能提供任意函数的 auto 返回推导。表达式组合将这一负担缩小到单个 callback 的结果，而不是整张执行图。
+
+`Just`、`JustError`、`JustStopped` 现在是不同的具体类型，便于用 `can_error`
+区分完成能力。`Immediate(Values)` 仍是保存运行期完成 union 的通用 sender，保守视为可能报错。
+`RunInScope(Producer)` 是生产任务收尾链的类型构造器；两个 counting scope 都提供
+`Join`、`Token` 和 `Association` 类型。
+
+`WhenAll(.{A,B})` 按输入顺序拼接成功参数，通过 `meta.ValuesOf(S)` 查询参数 tuple 类型；`WhenAny(ContainerType)` 的输出值是 tagged union，输入容器类型保留字段名。`Associated(S,Token)` 命名关联 owner，`.View` 是可组合的借用 sender。`whenAny` 通过 `meta.ValueOf(S)` 取得 union 类型，具体见 [并发结果](combinators.zh-CN.md)。

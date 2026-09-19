@@ -68,6 +68,7 @@ pub fn Shared(comptime S: type) type {
         pub const View = struct {
             state: *State,
             pub const Values = S.Values;
+            pub const can_error = @import("../detail/completion_traits.zig").canError(S);
             pub const Operation = struct {
                 state: *State,
                 receiver: c.Receiver(S.Values),

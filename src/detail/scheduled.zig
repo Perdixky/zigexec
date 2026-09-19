@@ -1,3 +1,4 @@
+const traits = @import("completion_traits.zig");
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 const Task = @import("task.zig").Task;
@@ -5,6 +6,7 @@ pub fn Scheduled(comptime Scheduler: type) type {
     return struct {
         scheduler: Scheduler,
         pub const Values = @Tuple(&.{});
+        pub const can_error = traits.fallible(@typeInfo(@TypeOf(Scheduler.submit)).@"fn".return_type.?);
         const Self = @This();
         pub const Operation = struct {
             scheduler: Scheduler,

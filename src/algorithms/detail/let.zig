@@ -1,3 +1,4 @@
+const traits = @import("../../detail/completion_traits.zig");
 const std = @import("std");
 const c = @import("../../execution/protocol.zig");
 pub const Channel = enum { value, err, stopped };
@@ -21,6 +22,7 @@ pub fn Let(comptime S: type, comptime F: type, comptime channel: Channel) type {
         sender: S,
         callback: F,
         pub const Values = V;
+        pub const can_error = (channel != .err and traits.canError(S)) or traits.fallible(c.CheckedResult(F, Args, stage)) or traits.canError(Next);
         const Self = @This();
         pub const Operation = struct {
             sender: S,

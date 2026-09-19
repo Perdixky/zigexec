@@ -19,6 +19,15 @@ pub fn build(b: *std.Build) void {
 
     const error_tests = b.step("test-errors", "Verify compile-time API diagnostics");
     const diagnostic_cases = .{
+        .{ "when_any_empty", "zigexec.whenAny: requires at least one sender" },
+        .{ "when_any_container", "zigexec.whenAny: expected a tuple or named struct of senders" },
+        .{ "when_any_sender", "zigexec.whenAny: i64 must return a sender or !sender (Values, Operation.start, connect); got i64" },
+        .{ "when_all_arity", "expects 1 upstream value(s), but upstream provides 2" },
+        .{ "spawn_errors", "zigexec.spawn: sender may complete with error; handle errors with an infallible uponError or letError before spawning" },
+        .{ "spawn_fallible_handler", "zigexec.spawn: sender may complete with error; handle errors with an infallible uponError or letError before spawning" },
+        .{ "spawn_schedule_error", "zigexec.spawn: sender may complete with error; handle errors with an infallible uponError or letError before spawning" },
+        .{ "spawn_values", "zigexec.spawn: task must complete with no values; consume results with then first" },
+        .{ "scope_run_values", "zigexec.runInScope: producer must complete with no values" },
         .{ "wrong_input", "upstream argument 0: expected []const u8, got i64" },
         .{ "deferred_input", "upstream argument 0: expected []const u8, got i64" },
         .{ "wrong_arity", "expects 2 upstream value(s), but upstream provides 1" },

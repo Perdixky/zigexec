@@ -1,4 +1,7 @@
 test {
+    _ = @import("associate.zig");
+    _ = @import("when_any.zig");
+    _ = @import("counting_scope.zig");
     _ = @import("lifetime.zig");
     _ = @import("repeat.zig");
     _ = @import("allocator.zig");

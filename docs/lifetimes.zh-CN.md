@@ -30,7 +30,7 @@ pub const Operation = struct {
 };
 ```
 
-`then` 把业务函数的结果写入自己的 output 槽。`letValue` 与 `upstream()` 借用上游结果，不再复制 input 或构造保存同一 tuple 的 just sender。`continuesOn` 和 `withStopToken` 保存结果指针。`whenAll` 保存各分支结果指针，全部成功后构造一份连续的最终 tuple。
+`then` 把业务函数的结果写入自己的 output 槽。`letValue` 与 `upstream()` 借用上游结果，不再复制 input 或构造保存同一 tuple 的 just sender。`continuesOn` 和 `withStopToken` 保存结果指针。`whenAll` 保存各分支结果指针，全部成功后构造一份连续的完成参数存储；callback 按独立参数接收，`syncWait` 则复制参数 tuple 作为返回值。
 
 `split` 是独立所有权边界：共享状态保存缓存，每个订阅 operation 保存自己的结果，避免订阅的异步后续依赖已释放的 shared owner。slice、指针仍只做浅复制，库不自动释放用户资源。
 
@@ -84,3 +84,12 @@ zig build-obj -O ReleaseSafe --dep zigexec \
 zig run -O ReleaseSafe --dep zigexec \
   -Mroot=tests/codegen/operation_layout.zig -Mzigexec=src/root.zig
 ```
+
+
+## 关联与分支退休
+
+`associate` 把释放动作挂到当前执行 scope。退休时先提取动作，允许 `setFinished`
+释放 operation 记录后，再释放 counting scope 关联。`whenAny` 独立观察每个分支执行
+退出，但把关联记录转交外层 scope，保证异步下游仍可安全借用结果。
+`repeatEffect` 按每轮的存储复用边界处理。详见 [scope 关联](counting_scopes.zh-CN.md)
+与 [并发结果](combinators.zh-CN.md)。

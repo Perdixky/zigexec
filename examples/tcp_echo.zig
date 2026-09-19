@@ -1,86 +1,81 @@
 //! Linux TCP echo server using zigexec + io_uring, without std.Io or libc.
 //! Run: zig build run-echo -- [port] [--once]
-//! Connections are served sequentially; the reactor drives each read/write loop.
+//! One accept loop spawns independent echo tasks on one io_uring scheduler.
 const std = @import("std");
 const ex = @import("zigexec");
 const linux = std.os.linux;
 const Io = ex.io.For(*ex.IoUring);
 
-// One live connection at a time. This state outlives the complete server task.
-// The graph owns when resources are acquired and released; callbacks capture
-// only this pointer, and all socket I/O is performed by senders.
-const Connection = struct {
+// The factory lives inside the spawned operation. Its buffer stays at a stable
+// address until that task's setFinished; no buffer points into the accept loop.
+const Echo = struct {
     context: *ex.IoUring,
-    allocator: std.mem.Allocator = undefined,
-    socket: ?i32 = null,
-    buffer: ?[]u8 = null,
+    socket: i32,
+    buffer: [16 * 1024]u8 = undefined,
 
-    fn close(self: *@This()) void {
-        if (self.buffer) |buffer| self.allocator.free(buffer);
-        self.buffer = null;
-        if (self.socket) |socket| _ = linux.close(socket);
-        self.socket = null;
-    }
-};
-const SetAllocator = struct {
-    connection: *Connection,
-    pub fn call(self: @This(), allocator: std.mem.Allocator) void {
-        self.connection.allocator = allocator;
-    }
-};
-const Accept = struct {
-    context: *ex.IoUring,
-    listener: i32,
-    pub fn call(self: @This()) Io.Accept {
-        return Io.accept(self.context, self.listener, linux.SOCK.CLOEXEC);
-    }
-};
-const OpenConnection = struct {
-    connection: *Connection,
-    pub fn call(self: @This(), socket: i32) !void {
-        // Record the accepted fd before allocating, so failure closes it too.
-        self.connection.socket = socket;
-        self.connection.buffer = try self.connection.allocator.alloc(u8, 16 * 1024);
-    }
-};
-const Receive = struct {
-    connection: *Connection,
-    pub fn call(self: @This()) Io.Recv {
-        const c = self.connection;
-        return Io.recv(c.context, c.socket.?, c.buffer.?, 0);
+    const Loop = Io.Recv.LetValue(EchoChunk).Then(DiscardCount).RepeatEffect().UponError(PeerError);
+    pub fn call(self: *@This()) Loop {
+        return Io.recv(self.context, self.socket, &self.buffer, 0)
+            .letValue(EchoChunk, .{self})
+            .then(DiscardCount, .{})
+            .repeatEffect()
+            .uponError(PeerError, .{});
     }
 };
 const EchoChunk = struct {
-    connection: *Connection,
+    connection: *Echo,
     pub fn call(self: @This(), received: usize) error{EndOfStream}!Io.SendAll {
         if (received == 0) return error.EndOfStream;
         const c = self.connection;
-        // Short writes are retried by sendAll; a broken peer must not SIGPIPE.
-        return Io.sendAll(c.context, c.socket.?, c.buffer.?[0..received], linux.MSG.NOSIGNAL);
+        return Io.sendAll(c.context, c.socket, c.buffer[0..received], linux.MSG.NOSIGNAL);
     }
 };
 const DiscardCount = struct {
     pub fn call(_: @This(), _: usize) void {}
 };
-const FinishConnection = struct {
-    connection: *Connection,
-    pub fn call(self: @This(), err: anyerror) anyerror!void {
-        self.connection.close();
-        if (err == error.OutOfMemory) return err;
+const PeerError = struct {
+    pub fn call(_: @This(), err: anyerror) void {
         if (err != error.EndOfStream) std.debug.print("connection: {s}\n", .{@errorName(err)});
-        // EOF and peer I/O errors end this connection; accept the next one.
     }
 };
-const FinishStopped = struct {
-    connection: *Connection,
+const Close = struct {
+    socket: i32,
+    pub fn call(self: @This()) void {
+        _ = linux.close(self.socket);
+    }
+};
+const CloseError = struct {
+    socket: i32,
+    pub fn call(self: @This(), err: anyerror) void {
+        _ = linux.close(self.socket);
+        std.debug.print("connection: {s}\n", .{@errorName(err)});
+    }
+};
+const CloseStopped = struct {
+    socket: i32,
     pub fn call(self: @This()) ex.JustStopped(.{}) {
-        self.connection.close();
+        _ = linux.close(self.socket);
         return ex.justStopped(ex.Values(.{}));
     }
 };
-const ShouldStop = struct {
+const SpawnEcho = struct {
+    scope: *ex.CountingScope,
+    allocator: std.mem.Allocator,
+    context: *ex.IoUring,
     once: bool,
-    pub fn call(self: @This()) bool {
+    pub fn call(self: @This(), socket: i32) !bool {
+        // If admission/allocation fails, the task has not started: retain fd
+        // ownership here. Once spawned, every completion path closes it.
+        errdefer _ = linux.close(socket);
+        try ex.spawn(
+            ex.schedule(self.context.getScheduler())
+                .letValue(Echo, .{ .context = self.context, .socket = socket })
+                .then(Close, .{socket})
+                .uponError(CloseError, .{socket})
+                .letStopped(CloseStopped, .{socket}),
+            self.scope.getToken(),
+            .{ .allocator = self.allocator },
+        );
         return self.once;
     }
 };
@@ -126,34 +121,17 @@ pub fn main(init: std.process.Init.Minimal) !void {
     _ = try checked("getsockname", linux.getsockname(listener, @ptrCast(&address), &address_length));
     std.debug.print("listening on 127.0.0.1:{d}\n", .{std.mem.bigToNative(u16, address.port)});
 
-    var connection: Connection = .{ .context = context };
-    defer connection.close();
+    var scope: ex.CountingScope = .{};
+    defer scope.deinit();
 
-    const server = ex.readAllocator()
-        .then(SetAllocator, .{&connection})
-        .letValue(
-        ex.upstream()
-            .letValue(Accept, .{ context, listener })
-            .letValue(
-                ex.upstream()
-                    .then(OpenConnection, .{&connection})
-                    .letValue(
-                        ex.upstream()
-                            .letValue(Receive, .{&connection})
-                            .letValue(EchoChunk, .{&connection})
-                            .then(DiscardCount, .{})
-                            .repeatEffect(),
-                        .{},
-                    )
-                    .uponError(FinishConnection, .{&connection})
-                    .letStopped(FinishStopped, .{&connection})
-                    .then(ShouldStop, .{once}),
-                .{},
-            )
-            .repeatEffectUntil(),
-        .{},
-    );
+    // Exactly one accept is outstanding. spawn returns as soon as the echo task
+    // is started/queued, so repeat immediately accepts the next connection.
+    const accept_loop = Io.accept(context, listener, linux.SOCK.CLOEXEC)
+        .then(SpawnEcho, .{ &scope, allocator, context, once })
+        .repeatEffectUntil();
+    const server = ex.runInScope(&scope, accept_loop);
 
-    // The only wait: accept, read, write, cleanup, and repetition form one graph.
-    _ = try server.syncWait(.{ .allocator = allocator });
+    // The only wait includes the accept loop AND all spawned children. --once
+    // closes admission after one accept and drains that echo task without stop.
+    _ = try server.syncWait(.{});
 }

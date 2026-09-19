@@ -1,9 +1,13 @@
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 pub fn Immediate(comptime V: type) type {
+    return ImmediateKind(V, null);
+}
+pub fn ImmediateKind(comptime V: type, comptime channel: ?enum { value, err, stopped }) type {
     return struct {
         result: c.Completion(V),
         pub const Values = V;
+        pub const can_error = channel == null or channel == .err;
         const Self = @This();
         pub const Operation = struct {
             receiver: c.Receiver(V),

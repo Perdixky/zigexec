@@ -51,7 +51,9 @@ Callbacks are struct types; ordinary functions use `ex.Fn(function)`.
 | `LetError(S,F)`, `LetStopped(S,F)` | Sender and recovery factory type |
 | `Bulk(S,F)` | Sender and callback; count is not part of the type |
 | `RepeatEffect(S)`, `RepeatEffectUntil(S)` | Repeat empty success or until bool is true |
-| `WhenAll(.{A,B})` | Sender type list |
+| `WhenAll(.{A,B})` | Sender type list; concatenates success arguments |
+| `WhenAny(ContainerType)` | Tuple/named struct of senders; produces one tagged union |
+| `Associated(S,Token)` | Explicit association owner; `.View` is the composable borrowed sender |
 | `WithStopToken(S)` | Input sender |
 | `Schedule(Scheduler)` | Scheduler type |
 | `StartsOn(Scheduler,S)`, `ContinuesOn(S,Scheduler)` | Scheduler and sender types |
@@ -62,8 +64,7 @@ Callbacks are struct types; ordinary functions use `ex.Fn(function)`.
 | `Bind(function, .{PrefixTypes...})` | Known function with bound prefix types |
 
 `JustError` and `JustStopped` name the success type that would be possible,
-not an error type. The immediate senders share one completion union, so equal
-success tuples produce equal sender types.
+not an error type. Their concrete types also distinguish completion capability.
 
 `Just(.{i64})` matches both `just(21)` and `just(.{21})`. Untyped integer
 literals materialize as `i64`; use `just(@as(u16, 21))` for another type.
@@ -162,3 +163,9 @@ argument value cannot be specialized from argument types alone; fix that
 argument first or use an explicit type constructor. Zig function boundaries
 still require declared return types. Expression composition reduces that burden
 to individual callback results instead of the entire graph.
+
+`Just`, `JustError`, and `JustStopped` are now distinct concrete types so
+`can_error` can distinguish their completion capabilities. `Immediate(Values)`
+remains the general runtime completion-union sender and is conservatively fallible.
+`RunInScope(Producer)` names the producer cleanup sender; both counting scopes
+expose `Join`, `Token`, and `Association` types.

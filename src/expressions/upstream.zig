@@ -21,6 +21,7 @@ fn Borrowed(comptime V: type) type {
     return struct {
         input: *const V,
         pub const Values = V;
+        pub const can_error = false;
         pub const Operation = struct {
             input: *const V,
             receiver: ex.Receiver(V),

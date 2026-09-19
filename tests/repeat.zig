@@ -31,9 +31,9 @@ test "repeatEffect checks cancellation between inline effects and before the fir
     defer stop.deinit();
     var count: usize = 0;
     const task = ex.just(.{}).then(Tick, .{ &count, &stop }).repeatEffect().withStopToken(stop.token());
-    try t.expectEqual(null, try task.syncWait(.{ .allocator = std.testing.allocator }));
+    try t.expect((try task.syncWait(.{ .allocator = std.testing.allocator })) == null);
     try t.expectEqual(100, count);
-    try t.expectEqual(null, try task.syncWait(.{ .allocator = std.testing.allocator }));
+    try t.expect((try task.syncWait(.{ .allocator = std.testing.allocator })) == null);
     try t.expectEqual(100, count);
 }
 
@@ -133,7 +133,7 @@ test "cancellation reaches an asynchronous effect already waiting for stop" {
         ex.asSender(support.AwaitStop{}).repeatEffect().withStopToken(stop.token()),
         ex.just(.{}).then(Cancel, .{&stop}),
     });
-    try t.expectEqual(null, try task.syncWait(.{ .allocator = std.testing.allocator }));
+    try t.expect((try task.syncWait(.{ .allocator = std.testing.allocator })) == null);
 }
 
 test "asynchronous retirement may destroy a repeating connection" {

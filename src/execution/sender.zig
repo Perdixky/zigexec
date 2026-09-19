@@ -8,6 +8,7 @@ pub fn Sender(comptime Impl: type) type {
         pub const Implementation = Impl;
         inner: Impl,
         pub const Values = Impl.Values;
+        pub const can_error = @import("../detail/completion_traits.zig").canError(Impl);
         pub const Operation = Impl.Operation;
         const Self = @This();
 
@@ -90,6 +91,9 @@ pub fn Sender(comptime Impl: type) type {
         }
         pub fn split(self: Self, allocator: @import("std").mem.Allocator) !ex.Shared(Self) {
             return ex.split(allocator, self);
+        }
+        pub fn associate(self: Self, token: anytype) ex.Associated(Self, @TypeOf(token)) {
+            return ex.associate(self, token);
         }
         pub fn syncWait(self: Self, env: ex.Env) anyerror!?Values {
             return ex.syncWait(self, env);

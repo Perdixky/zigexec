@@ -1,5 +1,6 @@
 //! Bind a lexical expression to stored inputs, or sequence an already-constructed
 //! sender. A concrete sender does not consume the predecessor's completion values.
+const traits = @import("../../detail/completion_traits.zig");
 const std = @import("std");
 const c = @import("../../execution/protocol.zig");
 
@@ -21,6 +22,7 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
         sender: S,
         body: Body,
         pub const Values = Next.Values;
+        pub const can_error = traits.canError(S) or traits.canError(Next);
         const Self = @This();
         pub const Operation = struct {
             sender: S,

@@ -1,3 +1,4 @@
+const traits = @import("../detail/completion_traits.zig");
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 
@@ -14,6 +15,7 @@ pub fn Repeat(comptime S: type, comptime until: bool) type {
     return struct {
         sender: S,
         pub const Values = @Tuple(&.{});
+        pub const can_error = traits.canError(S);
         const Self = @This();
         pub const Operation = struct {
             sender: S,

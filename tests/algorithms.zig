@@ -200,3 +200,51 @@ test "whenAll reports first observed error, not lowest input index" {
     });
     try testing.expectError(error.Early, work.syncWait(.{ .allocator = std.testing.allocator }));
 }
+
+test "whenAll passes separate arguments to then letValue and upstream subchains" {
+    const Add = struct {
+        pub fn call(_: @This(), left: i64, right: i64) i64 {
+            return left + right;
+        }
+    };
+    const Factory = struct {
+        pub fn call(_: @This(), left: i64, right: i64) ex.Just(.{i64}) {
+            return ex.just(left + right);
+        }
+    };
+    const TupleAdd = struct {
+        pub fn callTuple(_: @This(), values: ex.Values(.{ i64, i64 })) i64 {
+            return values[0] + values[1];
+        }
+    };
+    const task = ex.whenAll(.{ ex.just(@as(i64, 20)), ex.just(@as(i64, 22)) });
+    try testing.expectEqual(42, (try task.then(Add, .{}).syncWait(.{})).?[0]);
+    try testing.expectEqual(42, (try task.letValue(Factory, .{}).syncWait(.{})).?[0]);
+    try testing.expectEqual(42, (try task.letValue(ex.upstream().then(Add, .{}), .{}).syncWait(.{})).?[0]);
+    try testing.expectEqual(42, (try task.then(TupleAdd, .{}).syncWait(.{})).?[0]);
+}
+
+test "whenAll preserves tuple valued arguments and syncWait packages mixed arity results" {
+    const Pair = ex.Values(.{ i64, bool });
+    const MakePair = struct {
+        pub fn call(_: @This()) Pair {
+            return .{ 20, true };
+        }
+    };
+    const Read = struct {
+        pub fn call(_: @This(), pair: Pair, right: u8) i64 {
+            return if (pair[1]) pair[0] + right else 0;
+        }
+    };
+    const task = ex.whenAll(.{ ex.just(.{}).then(MakePair, .{}), ex.just(@as(u8, 22)) });
+    try testing.expectEqual(ex.Values(.{ Pair, u8 }), @TypeOf(task).Values);
+    try testing.expectEqual(42, (try task.then(Read, .{}).syncWait(.{})).?[0]);
+    const result = (try ex.whenAll(.{
+        ex.just(@as(i64, 20)),
+        ex.just(.{ @as(bool, true), @as(u8, 22) }),
+    }).syncWait(.{})).?;
+    try testing.expectEqual(ex.Values(.{ i64, bool, u8 }), @TypeOf(result));
+    try testing.expectEqual(20, result[0]);
+    try testing.expect(result[1]);
+    try testing.expectEqual(22, result[2]);
+}

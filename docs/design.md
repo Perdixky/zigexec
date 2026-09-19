@@ -210,8 +210,17 @@ pointers, slices, and handles are borrowed by default; scopes do not extend
 factory locals or external resources. Zig values have no implicit destructor,
 so algorithms never call `deinit` for discarded application values.
 
-Environment-restoring `on`, `whenAny`, general timeout composition,
-`async_scope`, custom shared-result destruction, coroutine/GPU integration,
+Environment-restoring `on`, the remaining async-scope adaptor `spawnFuture`, custom shared-result destruction, coroutine/GPU integration,
 and other platform backends are not yet implemented. The existing cancellation
 registration and I/O protocols are intended to support those additions without
 replacing the core lifetime model.
+
+`SimpleCountingScope` and `CountingScope` follow the counting/association model;
+`spawn` handles allocation and operation ownership, while `runInScope` is an
+explicit producer failure/cleanup policy. `Env.start_scheduler` controls pending
+join completion and syncWait supplies a caller-thread RunLoop by default.
+See [counting scopes](counting_scopes.md).
+
+`whenAll` passes concatenated completion arguments downstream; `whenAny` passes a tagged
+union and drains losing branches before forwarding. These Zig result shapes and
+cancellation semantics are described in [concurrent results](combinators.md).

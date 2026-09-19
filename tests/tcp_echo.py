@@ -6,6 +6,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 from contextlib import contextmanager
 
 
@@ -38,6 +39,15 @@ def server(binary, once=False):
 def receive_all(client):
     result = bytearray()
     while chunk := client.recv(4093):
+        result.extend(chunk)
+    return result
+
+
+def receive_exact(client, count):
+    result = bytearray()
+    while len(result) < count:
+        chunk = client.recv(count - len(result))
+        assert chunk, "unexpected EOF"
         result.extend(chunk)
     return result
 
@@ -79,7 +89,48 @@ def main(binary):
                 assert receive_all(client) == payload
         assert process.poll() is None, "reset peer terminated the server"
 
-    print("TCP echo passed: empty EOF, 1 MiB binary/fragmented half-close, reset, reconnect")
+    # One idle client cannot block accepting/serving others. All 32 clients must
+    # receive their distinct echoes before ANY closes: a small accept-worker pool
+    # or a sequential server deadlocks at this barrier and fails the timeout.
+    with server(binary) as (process, address):
+        with socket.create_connection(address, timeout=10) as idle:
+            barrier = threading.Barrier(32, timeout=10)
+
+            def exchange(index):
+                payload = bytes([index]) * (20000 + index * 997) + b"tail\x00"
+                with socket.create_connection(address, timeout=10) as client:
+                    client.sendall(payload)
+                    assert receive_exact(client, len(payload)) == payload
+                    barrier.wait()
+                    client.shutdown(socket.SHUT_WR)
+                    assert client.recv(1) == b""
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=32) as pool:
+                list(pool.map(exchange, range(32)))
+            # A reset and a new connection while the first connection is still
+            # alive must neither corrupt nor close the first child's state.
+            with socket.create_connection(address, timeout=10) as broken:
+                broken.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+                broken.sendall(b"reset while other clients are active")
+            with socket.create_connection(address, timeout=10) as newcomer:
+                newcomer.sendall(b"still accepting")
+                assert receive_exact(newcomer, 15) == b"still accepting"
+            idle.sendall(b"idle client survived")
+            assert receive_exact(idle, 20) == b"idle client survived"
+        assert process.poll() is None
+
+    # --once means drain the spawned echo, not return when spawn succeeds.
+    with server(binary, once=True) as (process, address):
+        with socket.create_connection(address, timeout=10) as client:
+            for payload in (b"first round", b"second round"):
+                client.sendall(payload)
+                assert receive_exact(client, len(payload)) == payload
+                assert process.poll() is None, "--once exited before the child finished"
+            client.shutdown(socket.SHUT_WR)
+            assert client.recv(1) == b""
+        assert process.wait(timeout=10) == 0
+
+    print("TCP echo passed: EOF, 1 MiB half-close, reset/reconnect, 32 concurrent clients + idle client, --once drain")
 
 
 if __name__ == "__main__":

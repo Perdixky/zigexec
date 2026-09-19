@@ -28,6 +28,12 @@ pub fn WhenAll(comptime Senders: type) type {
     return struct {
         senders: Senders,
         pub const Values = V;
+        pub const can_error = blk: {
+            for (@typeInfo(Senders).@"struct".field_types) |S| {
+                if (@import("../detail/completion_traits.zig").canError(S)) break :blk true;
+            }
+            break :blk false;
+        };
         const Self = @This();
         pub const Operation = struct {
             senders: Senders,

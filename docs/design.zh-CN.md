@@ -132,4 +132,10 @@ io_uring 将后端状态嵌入 Request，单独的 submission/completion 模块�
 
 `letValue` 保留上游 operation 和工厂状态，借用其输入；整个根 connection 保留到执行入口退出；已有 sender 形式按顺序启动子任务，deferred 形式绑定最近一层输入。所有外部指针/slice/句柄默认借用；scope 不延长工厂栈局部变量或外部资源的生命周期，内部借用不得越过所属 operation 的销毁。资源清理由调用方显式安排。析构不是 Zig 值的隐式行为，组合算法不会自动对丢弃的用户值调用 `deinit`。
 
-尚未提供环境作用域恢复的 `on`、`whenAny`、通用 timeout 组合、`async_scope`、共享状态自定义值析构策略、协程/GPU 或其他平台后端。下一步可以基于已有取消注册与 I/O 协议实现这些能力，而不必改写核心生命周期模型。
+尚未提供环境作用域恢复的 `on`、尚未实现的 async-scope 适配器 `spawnFuture`、共享状态自定义值析构策略、协程/GPU 或其他平台后端。下一步可以基于已有取消注册与 I/O 协议实现这些能力，而不必改写核心生命周期模型。
+
+`SimpleCountingScope` 与 `CountingScope` 对齐关联计数模型，`spawn` 负责分配和 operation
+所有权，`runInScope` 单独提供生产任务的失败/收尾策略。Env.start_scheduler 决定异步 join
+完成的调度位置，syncWait 默认提供等待线程上的 RunLoop。详见 [计数作用域](counting_scopes.zh-CN.md)。
+
+`whenAll` 向下游传拼接后的多个完成参数；`whenAny` 传 tagged union，且等待输掉的分支退出后再通知下游。详见 [并发结果](combinators.zh-CN.md)。

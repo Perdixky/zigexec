@@ -144,7 +144,7 @@ test "callback-driven cancellation propagates through nested graph without polli
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: *const @Tuple(&.{})) void {
+        pub fn setValue(_: *@This(), _: *const @TypeOf(sender).Values) void {
             @panic("unexpected value");
         }
         pub fn setError(_: *@This(), _: anyerror) void {

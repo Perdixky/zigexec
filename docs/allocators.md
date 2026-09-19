@@ -65,7 +65,8 @@ const bytes = allocator.alloc(u8, size) catch |err| {
 };
 ```
 
-Allocation happens after `start`; failures travel through the error channel.
+Lazy sender allocation happens after `start`; failures travel through the error channel.
+The eager `spawn` consumer allocates when called and returns allocation errors directly.
 `connect` remains non-allocating and infallible with respect to execution
 resources. A missing `getEnv` is a compile-time error, while a missing
 allocator is runtime information.
@@ -132,7 +133,12 @@ handle the error union returned by `getAllocator()`; direct access to
 `env.allocator` must handle the optional. Code that only observes an
 environment may leave it null.
 
-The TCP echo example still supplies an allocator because `readAllocator`
-allocates each connection's 16 KiB buffer. I/O senders that borrow caller-owned
-buffers can run without a task allocator, while backend context initialization
-still takes its own allocator.
+The TCP echo example passes an allocator to `spawn(sender, token, env)` to
+allocate each task's operation, which embeds its 16 KiB buffer. Counting scopes
+themselves need no allocator, and the final `syncWait(.{})` needs none. Backend
+context initialization still takes its own allocator.
+
+`Env.start_scheduler` is an optional borrowed scheduler handle. `syncWait` supplies
+a caller-thread RunLoop when this field is absent, allowing asynchronous counting
+scope join to resume on the waiting thread. It does not fill `Env.allocator`.
+See [counting scopes](counting_scopes.md) for lifetime and scheduling rules.

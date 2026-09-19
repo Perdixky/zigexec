@@ -5,10 +5,15 @@ const std = @import("std");
 /// results. Concurrent branches require an allocator supporting concurrent use.
 pub const Env = struct {
     allocator: ?std.mem.Allocator = null,
+    start_scheduler: ?@import("../schedulers/start_scheduler.zig") = null,
     stop_token: @import("../cancellation/token.zig") = .{},
 
     /// Internal execution lifetime, propagated unchanged by ordinary nodes.
     scope: ?*@import("scope.zig").Scope = null,
+
+    pub fn getStartScheduler(self: Env) error{MissingStartScheduler}!@import("../schedulers/start_scheduler.zig") {
+        return self.start_scheduler orelse error.MissingStartScheduler;
+    }
 
     pub fn withScope(self: Env, scope: *@import("scope.zig").Scope) Env {
         var result = self;

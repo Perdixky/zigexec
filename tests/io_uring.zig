@@ -262,7 +262,7 @@ test "a shared timer executes once and survives owner release during pending I/O
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), _: *const @Tuple(&.{})) void {
+        pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
             _ = self;
         }
         pub fn setFinished(self: *@This()) void {
@@ -344,4 +344,180 @@ test "scoped io_uring chain forwards allocated slices and retains factory-owned 
         .then(Decode, .{&observed}), .{}), .{});
     try t.expectEqual(5, (try task.syncWait(.{ .allocator = std.testing.allocator })).?[0]);
     // observed is now expired; consumers must finish reading inside the scope.
+}
+
+test "task scope drains real I/O children after successful producer" {
+    const context = try ex.IoUring.init(t.allocator, .{ .entries = 2 });
+    defer context.deinit();
+    var scope: ex.CountingScope = .{};
+    defer scope.deinit();
+    const Handle = struct {
+        pub fn call(_: @This(), err: anyerror) void {
+            std.debug.panic("unexpected {s}", .{@errorName(err)});
+        }
+    };
+    for (0..32) |_| try ex.spawn(ex.io.sleepFor(context, std.time.ns_per_ms).uponError(Handle, .{}), scope.getToken(), .{ .allocator = t.allocator });
+    try t.expect((try ex.runInScope(&scope, ex.just(.{})).syncWait(.{})) != null);
+}
+
+test "task scope producer failure cancels and retires pending kernel receives" {
+    const context = try ex.IoUring.init(t.allocator, .{ .entries = 2 });
+    defer context.deinit();
+    var sockets: [2]i32 = undefined;
+    try checked(linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0, &sockets));
+    defer _ = linux.close(sockets[0]);
+    defer _ = linux.close(sockets[1]);
+    const Discard = struct {
+        pub fn call(_: @This(), _: usize) void {}
+    };
+    var buffers: [32][8]u8 = undefined;
+    var scope: ex.CountingScope = .{};
+    defer scope.deinit();
+    const Handle = struct {
+        pub fn call(_: @This(), err: anyerror) void {
+            std.debug.panic("unexpected {s}", .{@errorName(err)});
+        }
+    };
+    for (&buffers) |*buffer| try ex.spawn(ex.io.recv(context, sockets[0], buffer, 0).then(Discard, .{}).uponError(Handle, .{}), scope.getToken(), .{ .allocator = t.allocator });
+    // Pass through the same reactor before failing the producer, so reads have
+    // reached the kernel. Cancellation must wait for both target and cancel CQEs.
+    const producer = ex.schedule(context.getScheduler()).letValue(ex.justError(ex.Values(.{}), error.AcceptFailed), .{});
+    try t.expectError(error.AcceptFailed, ex.runInScope(&scope, producer).syncWait(.{}));
+}
+
+test "counting join uses io_uring scheduler supplied by receiver environment" {
+    const context = try ex.IoUring.init(t.allocator, .{});
+    defer context.deinit();
+    const scheduler = context.getScheduler();
+    const Current = struct {
+        pub fn call(_: @This()) std.Thread.Id {
+            return std.Thread.getCurrentId();
+        }
+    };
+    const reactor_id = (try ex.schedule(scheduler).then(Current, .{}).syncWait(.{})).?[0];
+    var scope: ex.SimpleCountingScope = .{};
+    defer scope.deinit();
+    var association = scope.getToken().tryAssociate();
+    const Capture = struct {
+        scheduler: ex.StartScheduler,
+        done: Event = .{},
+        id: std.Thread.Id = undefined,
+        pub fn getEnv(self: *@This()) ex.Env {
+            return .{ .start_scheduler = self.scheduler };
+        }
+        pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
+            self.id = std.Thread.getCurrentId();
+        }
+        pub fn setError(_: *@This(), _: anyerror) void {
+            @panic("unexpected scheduling error");
+        }
+        pub fn setStopped(_: *@This()) void {
+            @panic("unexpected stopped");
+        }
+        pub fn setFinished(self: *@This()) void {
+            self.done.set();
+        }
+    };
+    var capture: Capture = .{ .scheduler = ex.StartScheduler.init(&scheduler) };
+    var join = ex.connect(scope.join(), &capture);
+    join.start();
+    association.deinit();
+    capture.done.wait();
+    try t.expectEqual(reactor_id, capture.id);
+}
+
+test "io_uring erased start scheduler schedules and rejects after shutdown" {
+    const context = try ex.IoUring.init(t.allocator, .{});
+    defer context.deinit();
+    const scheduler = context.getScheduler();
+    const erased = ex.StartScheduler.init(&scheduler);
+    _ = try ex.schedule(erased).syncWait(.{});
+    context.shutdown();
+    try t.expectError(error.ContextClosed, ex.schedule(erased).syncWait(.{}));
+}
+
+test "shutdown drains erased scheduler jobs already accepted behind a busy reactor" {
+    const context = try ex.IoUring.init(t.allocator, .{});
+    defer context.deinit();
+    const scheduler = context.getScheduler();
+    const erased = ex.StartScheduler.init(&scheduler);
+    const Capture = struct {
+        done: Event = .{},
+        pub fn getEnv(_: *@This()) ex.Env {
+            return .{};
+        }
+        pub fn setValue(_: *@This(), _: *const ex.Values(.{})) void {}
+        pub fn setError(_: *@This(), _: anyerror) void {
+            @panic("accepted task lost");
+        }
+        pub fn setStopped(_: *@This()) void {
+            @panic("unexpected cancellation");
+        }
+        pub fn setFinished(self: *@This()) void {
+            self.done.set();
+        }
+    };
+    const Block = struct {
+        entered: *Event,
+        release: *Event,
+        pub fn call(self: @This()) void {
+            self.entered.set();
+            self.release.wait();
+        }
+    };
+    var entered: Event = .{};
+    var release: Event = .{};
+    var first: Capture = .{};
+    var blocker = ex.connect(ex.schedule(erased).then(Block, .{ &entered, &release }), &first);
+    blocker.start();
+    entered.wait();
+    var captures: [32]Capture = @splat(.{});
+    var ops: [32]ex.Connection(ex.Schedule(ex.StartScheduler)) = undefined;
+    for (&ops, &captures) |*op, *capture| {
+        op.* = ex.connect(ex.schedule(erased), capture);
+        op.start();
+    }
+    context.shutdown();
+    release.set();
+    first.done.wait();
+    for (&captures) |*capture| capture.done.wait();
+}
+
+test "whenAny timeout drains cancelled recv before downstream reuses the buffer" {
+    const context = try ex.IoUring.init(t.allocator, .{ .entries = 2 });
+    defer context.deinit();
+    var sockets: [2]i32 = undefined;
+    try checked(linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0, &sockets));
+    defer _ = linux.close(sockets[0]);
+    defer _ = linux.close(sockets[1]);
+    var buffer: [4]u8 = undefined;
+    const ReadAgain = struct {
+        context: *ex.IoUring,
+        socket: i32,
+        peer: i32,
+        buffer: []u8,
+        pub fn call(self: @This(), result: anytype) ex.WhenAll(.{ ex.io.Recv(*ex.IoUring), ex.io.Send(*ex.IoUring) }) {
+            std.debug.assert(result == .timeout);
+            return ex.whenAll(.{
+                ex.io.recv(self.context, self.socket, self.buffer, 0),
+                ex.io.send(self.context, self.peer, "ping", 0),
+            });
+        }
+    };
+    for (0..10) |_| {
+        const result = (try ex.whenAny(.{
+            .read = ex.io.recv(context, sockets[0], &buffer, 0),
+            .timeout = ex.io.sleepFor(context, std.time.ns_per_ms),
+        }).letValue(ReadAgain, .{ context, sockets[0], sockets[1], &buffer }).syncWait(.{})).?;
+        try t.expectEqual(4, result[0]);
+        try t.expectEqualStrings("ping", &buffer);
+    }
+    _ = try ex.io.send(context, sockets[1], "pong", 0).syncWait(.{});
+    const result = (try ex.whenAny(.{
+        .read = ex.io.recv(context, sockets[0], &buffer, 0),
+        .timeout = ex.io.sleepFor(context, 60 * std.time.ns_per_s),
+    }).syncWait(.{})).?[0];
+    try t.expect(result == .read);
+    try t.expectEqual(4, result.read[0]);
+    try t.expectEqualStrings("pong", &buffer);
 }
