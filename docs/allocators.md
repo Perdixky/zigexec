@@ -11,11 +11,11 @@
 
 ## 本库的 Zig API 选择
 
-本库采用固定结构的 Env，并选择更严格的显式分配规则：**Env.allocator 必填，syncWait 必须传 env**。这是本库的 Zig API 约定，并非 P2300 要求。
+本库采用固定结构的 Env：**Env.allocator 为可选的 `?std.mem.Allocator = null`，syncWait 仍显式接收 env**。无分配任务可写 `task.syncWait(.{})`；只有执行到需要 allocator 的查询时才要求它存在。缺失时返回 `error.MissingAllocator`，不会隐式使用全局 allocator。
 
 ```zig
 const env: ex.Env = .{
-    .allocator = allocator,
+    .allocator = allocator, // 可省略，默认 null
     .stop_token = source.token(), // 可省略，默认无取消能力
 };
 const result = try task.syncWait(env);
@@ -41,13 +41,15 @@ sender 通过环境查询分配器，而不是向 receiver 请求一种独立于
 
 ```zig
 const env = self.receiver.getEnv();
-const allocator = env.getAllocator(); // 等价于 env.allocator
+const allocator = env.getAllocator() catch |err| {
+    return self.receiver.setError(err);
+};
 const bytes = allocator.alloc(u8, size) catch |err| {
     return self.receiver.setError(err);
 };
 ```
 
-动态分配在 start 后发生，失败走 error 通道。connect 仍不分配执行资源且不可失败。自定义 receiver 缺少 getEnv，或构造 Env 时省略 allocator，均会在编译期报错。
+动态分配在 start 后发生，失败走 error 通道。connect 仍不分配执行资源且不可失败。自定义 receiver 缺少 getEnv 会在编译期报错；`getEnv` 可以返回空环境 `.{}`。由于 Env 是固定结构，allocator 是否存在为运行时信息，缺失查询在运行时报告，而不是编译期报错。
 
 普通链节点转发整个环境。whenAll 与 withStopToken 仅覆盖取消 token，保留 allocator；调度、then、三种形式及嵌套的 letValue、repeat 等也保留环境。
 
@@ -69,7 +71,7 @@ defer allocator.free(buffer);
 // buffer 在 syncWait 返回后仍有效。
 ```
 
-readAllocator 的具体类型为 ex.ReadAllocator，输出单个 std.mem.Allocator。readEnv 返回整个环境。同一 sender 可以在不同连接中使用不同环境。
+readAllocator 的具体类型为 ex.ReadAllocator，成功输出单个 std.mem.Allocator；缺失时发送 error.MissingAllocator，可通过 uponError/letError 恢复。未启动或被上游错误/停止跳过时不查询。readEnv 返回整个环境，其 allocator 字段可以为 null。同一 sender 可以在不同连接中使用不同环境。
 
 ## 分配来源与资源生命周期
 
@@ -83,6 +85,12 @@ upstream 在库内部借用 operation 中的完成 tuple，业务函数仍按声
 
 ## 共享执行与执行上下文
 
-split(allocator, sender) 在连接订阅 receiver 之前创建 shared owner，且订阅方可以有不同环境。共享上游有独立的内部环境，其 allocator 来自 shared owner；不会借用第一个订阅的 allocator，以免共享上游依赖短命的订阅 arena。
+split(allocator, sender) 在连接订阅 receiver 之前创建 shared owner，且订阅方可以有不同环境。共享上游有独立的内部环境，其 allocator 来自 shared owner；不会借用第一个订阅的 allocator，以免共享上游依赖短命的订阅 arena；订阅方可使用空环境。
 
 ThreadPool 和 IoUring context 可以服务多条链，它们的初始化与销毁继续使用各自显式传入的 allocator。任务执行资源和这些长寿命上下文有不同的所有权范围。
+
+## 从必填 allocator 迁移
+
+已显式传入 allocator 的 syncWait 调用不需要改。自定义 sender 的 `getAllocator()` 查询需要处理 `error.MissingAllocator`；直接读取 `env.allocator` 时需要处理 optional。仅需观察环境而不分配的代码可以保留 null。
+
+TCP echo 示例仍通过 readAllocator 分配每个连接的 16 KiB buffer，因此它的 syncWait 仍提供 allocator。普通 read/recv 等 I/O sender 使用调用方的 buffer，其任务环境可省略 allocator；后端 context 的初始化仍显式提供独立 allocator。

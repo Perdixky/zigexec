@@ -1,10 +1,10 @@
 const std = @import("std");
 
 /// Execution environment exposed through getEnv() and forwarded upstream.
-/// The allocator is borrowed: its lifetime must cover operations and any owned
+/// When supplied, the allocator is borrowed and must outlive operations and owned
 /// results. Concurrent branches require an allocator supporting concurrent use.
 pub const Env = struct {
-    allocator: std.mem.Allocator,
+    allocator: ?std.mem.Allocator = null,
     stop_token: @import("../cancellation/token.zig") = .{},
 
     /// Internal execution lifetime, propagated unchanged by ordinary nodes.
@@ -16,8 +16,9 @@ pub const Env = struct {
         return result;
     }
 
-    pub fn getAllocator(self: Env) std.mem.Allocator {
-        return self.allocator;
+    /// Allocation is an optional environment service, with no global fallback.
+    pub fn getAllocator(self: Env) error{MissingAllocator}!std.mem.Allocator {
+        return self.allocator orelse error.MissingAllocator;
     }
 
     /// Override only cancellation, preserving all other execution services.

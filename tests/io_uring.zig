@@ -14,15 +14,15 @@ fn checked(result: usize) !void {
 test "io_uring schedules and performs real file I/O and EOF" {
     const context = try ex.IoUring.init(t.allocator, .{});
     defer context.deinit();
-    try t.expect((try context.getScheduler().schedule().syncWait(.{ .allocator = std.testing.allocator })) != null);
+    try t.expect((try context.getScheduler().schedule().syncWait(.{})) != null);
     const file = try fd(linux.memfd_create("zigexec-test", linux.MFD.CLOEXEC));
     defer _ = linux.close(file);
-    try t.expectEqual(5, (try ex.io.writeSome(context, file, "hello", 0).syncWait(.{ .allocator = std.testing.allocator })).?[0]);
+    try t.expectEqual(5, (try ex.io.writeSome(context, file, "hello", 0).syncWait(.{})).?[0]);
     var buffer: [16]u8 = undefined;
-    const n = (try ex.io.readSome(context, file, &buffer, 0).syncWait(.{ .allocator = std.testing.allocator })).?[0];
+    const n = (try ex.io.readSome(context, file, &buffer, 0).syncWait(.{})).?[0];
     try t.expectEqualStrings("hello", buffer[0..n]);
-    try t.expectEqual(0, (try ex.io.readSome(context, file, &buffer, 100).syncWait(.{ .allocator = std.testing.allocator })).?[0]);
-    try t.expect((try ex.io.fsync(context, file).syncWait(.{ .allocator = std.testing.allocator })) != null);
+    try t.expectEqual(0, (try ex.io.readSome(context, file, &buffer, 100).syncWait(.{})).?[0]);
+    try t.expect((try ex.io.fsync(context, file).syncWait(.{})) != null);
 }
 
 test "io_uring opens closes and reports kernel errors" {

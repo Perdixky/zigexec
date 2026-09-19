@@ -47,7 +47,7 @@ pub const Operation = ...;
 pub fn connect(self: Self, receiver: Receiver(Values)) Operation;
 ```
 
-Operation 提供 `start(self: *Operation) void`，只能调用一次。成功、错误、停止恰好选择一个通道；receiver 的方法返回 `void`。用户 receiver 必须通过 `getEnv()` 暴露 Env；Env 的 allocator 必填，stop token 可选。
+Operation 提供 `start(self: *Operation) void`，只能调用一次。成功、错误、停止恰好选择一个通道；receiver 的方法返回 `void`。用户 receiver 必须通过 `getEnv()` 暴露 Env；Env 的 allocator 和 stop token 均可省略；缺失 allocator 仅在查询时返回 error.MissingAllocator。
 
 Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引用的值；`start` 在最终地址原地连接子操作。启动后不可移动/复制。公开 ex.connect 返回 Connection(S)，通过执行作用域把结果完成与存储回收分开：setValue 接收 *const Values，根 receiver 在 setFinished 才能回收。详见 [生命周期协议](lifetimes.md)。
 
@@ -91,7 +91,7 @@ Receiver 的 Values 保留静态类型，context 与三个函数指针进行小�
 
 ## 执行 allocator
 
-allocator 属于 Env。syncWait(sender, env) 显式接收环境，其内部 receiver 通过 getEnv 暴露该环境；不提供默认全局 allocator。sender 在 start 中通过 receiver.getEnv().getAllocator() 获取；动态分配失败通过 error 通道报告。whenAll 与 withStopToken 仅覆盖取消 token，保留其余环境字段。静态操作继续直接嵌入 operation。
+allocator 属于 Env。syncWait(sender, env) 显式接收环境，其内部 receiver 通过 getEnv 暴露该环境；不提供默认全局 allocator。sender 在 start 中通过 receiver.getEnv().getAllocator() 获取并处理错误；缺失 allocator 或动态分配失败通过 error 通道报告。whenAll 与 withStopToken 仅覆盖取消 token，保留其余环境字段。静态操作继续直接嵌入 operation。
 
 共享上游有独立的内部 receiver，使用 shared owner 的 allocator。allocator 本身不管理值的所有权，syncWait 也不销毁隐式 arena；拥有型结果可以留给调用方消费与释放。与 stdexec 的对照和本库的显式环境规则见 [allocator 与环境设计](allocators.md)。
 

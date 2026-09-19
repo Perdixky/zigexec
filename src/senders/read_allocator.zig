@@ -11,7 +11,8 @@ pub const ReadAllocator = struct {
         pub fn start(self: *@This()) void {
             std.debug.assert(!self.started);
             self.started = true;
-            self.output = .{self.receiver.getEnv().getAllocator()};
+            const allocator = self.receiver.getEnv().getAllocator() catch |err| return self.receiver.setError(err);
+            self.output = .{allocator};
             self.receiver.setValue(&self.output);
         }
     };

@@ -129,7 +129,7 @@ Zig 仍要求函数边界声明返回类型，库不能提供任意函数体的 
 
 ## 执行 allocator
 
-allocator 是 Env 的属性，receiver 通过 getEnv 暴露执行环境。syncWait 显式接收完整环境：
+allocator 是 Env 的可选属性，默认 null；不查询 allocator 的任务可以使用 `task.syncWait(.{})`。receiver 通过 getEnv 暴露执行环境，需要分配时显式配置：
 
 ```zig
 const result = try task.syncWait(.{ .allocator = allocator });
@@ -140,7 +140,7 @@ const result_with_env = try task.syncWait(.{
 });
 ```
 
-sender 在 start 中使用 `receiver.getEnv().getAllocator()`，业务链可以通过 `readAllocator()` 查询。环境穿过调度、并发和取消包装继续传递；分配失败走 error 通道。Env.allocator 必填，没有默认的全局分配器；静态节点仍无需堆分配。
+sender 在 start 中使用 `receiver.getEnv().getAllocator()` 并处理错误，业务链可以通过 `readAllocator()` 查询。环境穿过调度、并发和取消包装继续传递；查询缺失返回 `error.MissingAllocator`，分配失败走 error 通道。没有默认的全局分配器；静态节点无需堆分配。IoUring、ThreadPool 初始化与 split 创建 owner 仍显式接收 allocator。
 
 allocator 由调用方借出，不会在 syncWait 返回时自动释放它分配的结果；资源由相应拥有者清理。共享上游使用 shared owner 的 allocator，避免依赖某个短命订阅。具体边界与示例见 [allocator 设计](docs/allocators.md)。
 

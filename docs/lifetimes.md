@@ -76,7 +76,7 @@ zig build-obj -O ReleaseSafe --dep zigexec \
 
 在当前 0.17 master / x86_64 LLVM 后端中，64 KiB tuple 通过指针直接转发，forward 函数没有 payload memcpy 或临时数组分配。该检查不代表整张执行图的性能基准。
 
-同一份 `tests/codegen/operation_layout.zig` 对比优化前版本与当前版本，64 KiB `just` 经嵌套 letValue/upstream、continuesOn 和 withStopToken 后，原始组合 operation 的大小从 **721,592 字节降到 197,480 字节**，减少约 72.6%。此数字是 x86_64 上的类型布局，不是吞吐量结果，也不包含根 Connection 的包装。仍保留 sender 描述副本；本次没有消除构造/连接阶段所有复制。
+同一份 `tests/codegen/operation_layout.zig` 对比优化前版本与当前版本，64 KiB `just` 经嵌套 letValue/upstream、continuesOn 和 withStopToken 后，原始组合 operation 的大小从 **721,592 字节降到 197,544 字节**，减少约 72.6%。此数字是 x86_64 上的类型布局，不是吞吐量结果，也不包含根 Connection 的包装。仍保留 sender 描述副本；本次没有消除构造/连接阶段所有复制。
 
 ```sh
 zig run -O ReleaseSafe --dep zigexec \

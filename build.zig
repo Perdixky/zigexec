@@ -37,8 +37,7 @@ pub fn build(b: *std.Build) void {
         .{ "sender_type", "zigexec.letValue: pass a constructed sender/subchain value; only a factory callback is passed as a type" },
         .{ "repeat_values", "zigexec.repeatEffect: expected an empty completion tuple; use then to discard values" },
         .{ "repeat_condition", "zigexec.repeatEffectUntil: expected one bool completion value; true finishes, false repeats" },
-        .{ "env_allocator", "missing struct field: allocator" },
-        .{ "receiver_env", "zigexec.receiver: provide getEnv() returning an Env with an explicit allocator" },
+        .{ "receiver_env", "zigexec.receiver: provide getEnv() returning an Env" },
         .{ "receiver_value", "zigexec.receiver: setValue must accept *const Values; copy values.* only when retaining an owned result" },
     };
     inline for (diagnostic_cases) |case| {

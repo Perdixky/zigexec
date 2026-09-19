@@ -34,7 +34,8 @@ const Allocating = struct {
             return first.len + second.len;
         }
         pub fn start(self: *@This()) void {
-            const count = work(self.receiver.getEnv().getAllocator()) catch |err| return self.receiver.setError(err);
+            const allocator = self.receiver.getEnv().getAllocator() catch |err| return self.receiver.setError(err);
+            const count = work(allocator) catch |err| return self.receiver.setError(err);
             self.output = .{count};
             switch (self.outcome) {
                 .value => self.receiver.setValue(&self.output),
@@ -74,7 +75,7 @@ test "stop override preserves allocator and still observes parent cancellation" 
     defer extra.deinit();
     const Check = struct {
         pub fn call(_: @This(), current: ex.Env) !bool {
-            try expectAllocator(t.allocator, current.allocator);
+            try expectAllocator(t.allocator, try current.getAllocator());
             return current.stop_token.stopRequested();
         }
     };
@@ -138,9 +139,53 @@ test "allocated results remain owned by the caller after syncWait returns" {
 test "shared execution uses its owner allocator instead of a subscriber allocator" {
     var shared = try ex.readAllocator().split(t.allocator);
     defer shared.deinit();
+    try expectAllocator(t.allocator, (try shared.sender().syncWait(.{})).?[0]);
     try expectAllocator(t.allocator, (try shared.sender().syncWait(.{ .allocator = t.failing_allocator })).?[0]);
     try expectAllocator(t.allocator, (try shared.sender().syncWait(.{ .allocator = std.heap.page_allocator })).?[0]);
     var work = try ex.asSender(Allocating{}).split(t.allocator);
     defer work.deinit();
     try t.expectEqual(96, (try work.sender().syncWait(.{ .allocator = t.failing_allocator })).?[0]);
+}
+
+test "empty environments execute synchronous and scheduled graphs without an allocator" {
+    try t.expectEqual(42, (try ex.just(42).syncWait(.{})).?[0]);
+    const pool = try ex.ThreadPool.init(t.allocator, 2);
+    defer pool.deinit();
+    var stop: ex.StopSource = .{};
+    defer stop.deinit();
+    const Check = struct {
+        pub fn call(_: @This(), env: ex.Env) !bool {
+            try t.expectEqual(null, env.allocator);
+            try t.expect(env.stop_token.stopPossible());
+            try t.expectError(error.MissingAllocator, env.getAllocator());
+            return true;
+        }
+    };
+    const task = ex.just(.{}).letValue(ex.upstream().letValue(ex.readEnv(), .{}), .{})
+        .withStopToken(stop.token()).continuesOn(pool.getScheduler())
+        .then(Check, .{}).repeatEffectUntil().startsOn(pool.getScheduler());
+    const result = (try ex.whenAll(.{ task, ex.just(42) }).syncWait(.{})).?;
+    try t.expectEqual(42, result[0]);
+}
+
+test "missing allocator fails at query time and can be recovered" {
+    const sender = ex.readAllocator();
+    try t.expectError(error.MissingAllocator, sender.syncWait(.{}));
+    try t.expectError(error.MissingAllocator, sender.syncWait(.{ .allocator = null }));
+    try t.expectError(error.MissingAllocator, ex.asSender(Allocating{}).syncWait(.{}));
+    const pool = try ex.ThreadPool.init(t.allocator, 1);
+    defer pool.deinit();
+    const task = ex.just(.{}).letValue(ex.upstream().letValue(Query, .{}), .{}).startsOn(pool.getScheduler());
+    try t.expectError(error.MissingAllocator, task.syncWait(.{}));
+    // No allocator is queried if the continuation is skipped.
+    try t.expectEqual(null, try ex.justStopped(ex.Values(.{})).letValue(Query, .{}).syncWait(.{}));
+    try t.expectError(error.Upstream, ex.justError(ex.Values(.{}), error.Upstream).letValue(Query, .{}).syncWait(.{}));
+    const Recover = struct {
+        pub fn call(_: @This(), err: anyerror) !std.mem.Allocator {
+            try t.expectEqual(error.MissingAllocator, err);
+            return t.allocator;
+        }
+    };
+    try expectAllocator(t.allocator, (try sender.uponError(Recover, .{}).syncWait(.{})).?[0]);
+    try expectAllocator(t.allocator, (try sender.syncWait(.{ .allocator = t.allocator })).?[0]);
 }

@@ -148,7 +148,8 @@ first observed error is reported.
 
 ## Execution environment and cancellation
 
-The allocator is an `Env` property and is required:
+The allocator is an optional `Env` property. Tasks that do not query it can use
+`task.syncWait(.{})`; provide it explicitly for tasks that allocate:
 
 ```zig
 const result = try task.syncWait(.{ .allocator = allocator });
@@ -159,9 +160,11 @@ const result_with_stop = try task.syncWait(.{
 });
 ```
 
-Senders query `receiver.getEnv().getAllocator()` during `start`. The allocator
-is borrowed; `syncWait` does not implicitly free owning results. Allocation
-failure travels through the error channel.
+Senders query `receiver.getEnv().getAllocator()` during `start` and handle its
+error union. A missing allocator produces `error.MissingAllocator`; `readAllocator()`
+forwards it through the error channel. There is no implicit global allocator.
+The allocator is borrowed; `syncWait` does not implicitly free owning results.
+`IoUring.init`, `ThreadPool.init`, and `split` still require their own allocator.
 
 Cancellation is callback based and thread-safe:
 

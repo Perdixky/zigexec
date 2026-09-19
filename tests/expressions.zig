@@ -288,8 +288,9 @@ test "letValue accepts a concrete sender with its own inputs" {
 test "concrete async continuation forwards its environment and completion channels" {
     const Check = struct {
         pub fn call(_: @This(), env: ex.Env) !i64 {
-            try t.expectEqual(t.allocator.vtable, env.allocator.vtable);
-            try t.expectEqual(t.allocator.ptr, env.allocator.ptr);
+            const allocator = try env.getAllocator();
+            try t.expectEqual(t.allocator.vtable, allocator.vtable);
+            try t.expectEqual(t.allocator.ptr, allocator.ptr);
             try t.expect(env.stop_token.stopPossible());
             return 42;
         }

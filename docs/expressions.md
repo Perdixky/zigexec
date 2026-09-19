@@ -177,4 +177,4 @@ error: zigexec.then: wrong_input.Length.call upstream argument 0: expected []con
 
 ## 执行环境的 allocator
 
-allocator 属于 Env；最终 receiver 通过 getEnv 暴露该环境，整条普通链转发它。sender 在 start 中通过 `receiver.getEnv().getAllocator()` 查询，业务代码可使用 `readAllocator()`；由 `task.syncWait(.{ .allocator = allocator })` 或自定义 receiver 配置。它统一分配来源，不自动把值提升到堆上或替用户释放拥有型结果。详见 [allocator 与所有权](allocators.md)。
+allocator 属于 Env；最终 receiver 通过 getEnv 暴露该环境，整条普通链转发它。allocator 可以省略；sender 在 start 中通过 `receiver.getEnv().getAllocator()` 查询并处理错误，业务代码可使用 `readAllocator()`，缺失时发送 error.MissingAllocator；由 `task.syncWait(.{ .allocator = allocator })` 或自定义 receiver 配置。它统一分配来源，不自动把值提升到堆上或替用户释放拥有型结果。详见 [allocator 与所有权](allocators.md)。

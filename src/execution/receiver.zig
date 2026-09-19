@@ -21,7 +21,7 @@ pub fn Receiver(comptime Values: type) type {
                 @compileError("receiver must be a mutable single-item pointer");
             const R = info.pointer.child;
             if (!@hasDecl(R, "getEnv"))
-                @compileError("zigexec.receiver: provide getEnv() returning an Env with an explicit allocator");
+                @compileError("zigexec.receiver: provide getEnv() returning an Env");
             if (!@hasDecl(R, "setValue"))
                 @compileError("zigexec.receiver: provide setValue(self, values: *const Values)");
             const value_params = @typeInfo(@TypeOf(R.setValue)).@"fn".param_types;
