@@ -24,6 +24,7 @@ pub fn Transform(comptime S: type, comptime F: type, comptime channel: Channel) 
             sender: S,
             callback: F,
             receiver: c.Receiver(V),
+            output: V = undefined,
             child: S.Operation = undefined,
             started: bool = false,
             const Op = @This();
@@ -40,13 +41,14 @@ pub fn Transform(comptime S: type, comptime F: type, comptime channel: Channel) 
                 const result = c.invokeStored(&self.callback, args);
                 if (comptime @typeInfo(@TypeOf(result)) == .error_union) {
                     const value = result catch |err| return self.receiver.setError(err);
-                    self.receiver.setValue(c.resultValues(value));
+                    self.output = c.resultValues(value);
                 } else {
-                    self.receiver.setValue(c.resultValues(result));
+                    self.output = c.resultValues(result);
                 }
+                self.receiver.setValue(&self.output);
             }
-            pub fn setValue(self: *Op, values: S.Values) void {
-                if (channel == .value) self.apply(values) else self.receiver.setValue(values);
+            pub fn setValue(self: *Op, values: *const S.Values) void {
+                if (channel == .value) self.apply(values.*) else self.receiver.setValue(values);
             }
             pub fn setError(self: *Op, err: anyerror) void {
                 if (channel == .err) self.apply(.{err}) else self.receiver.setError(err);

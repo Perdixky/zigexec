@@ -37,7 +37,7 @@ operation 嵌入后端 Request，提交与取消不额外分配请求节点。�
 
 最后一步保证迟到的取消不会引用已被复用的 operation 地址，也保证内核不再借用 buffer。`-ECANCELED` 进入 stopped；若原操作已经成功，仍可发送成功，取消不是抢占或事务回滚。
 
-在最终通知前解除 stop callback，因此其他线程上已经开始的取消调用也会收尾。receiver 可以在完成回调里销毁 operation。
+在最终通知前解除 stop callback，因此其他线程上已经开始的取消调用也会收尾。I/O 完成处理持有执行入口，退出后才允许根 receiver 在 setFinished 回收 connection。
 
 ## 提交压力与唤醒
 
@@ -59,7 +59,7 @@ continuation 默认运行在 reactor 线程。不要在该线程阻塞调用 `sy
 
 ## 测试
 
-`zig build test-io` 独立运行真实内核测试，包括文件内容/EOF、内核错误、定时器、socketpair、loopback connect/accept、在途取消、关闭取消、2 条目 ring 下 128 个读取排队、100 轮地址复用、回调内释放 operation，以及共享 timer 的所有权。测试不会静默跳过受限内核。
+`zig build test-io` 独立运行真实内核测试，包括文件内容/EOF、内核错误、定时器、socketpair、loopback connect/accept、在途取消、关闭取消、2 条目 ring 下 128 个读取排队、100 轮地址复用、setFinished 内释放 connection，以及共享 timer 的所有权。测试不会静默跳过受限内核。
 
 ## 完整发送与 echo
 

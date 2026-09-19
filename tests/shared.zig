@@ -82,7 +82,7 @@ test "shared cancellation notifies all subscribers and started operations own th
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: @Tuple(&.{})) void {
+        pub fn setValue(_: *@This(), _: *const @Tuple(&.{})) void {
             @panic("unexpected value");
         }
         pub fn setError(_: *@This(), _: anyerror) void {

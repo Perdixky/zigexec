@@ -137,20 +137,23 @@ test "callback-driven cancellation propagates through nested graph without polli
         ex.whenAll(.{ ex.asSender(AwaitStop{}), ex.just(.{}) }),
         ex.just(.{}),
     }).withStopToken(added.token()).withStopToken(source.token());
-    const Operation = @TypeOf(sender).Operation;
+    const Operation = ex.Connection(@TypeOf(sender));
     const Receiver = struct {
         operation: *Operation,
         called: bool = false,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: @Tuple(&.{})) void {
+        pub fn setValue(_: *@This(), _: *const @Tuple(&.{})) void {
             @panic("unexpected value");
         }
         pub fn setError(_: *@This(), _: anyerror) void {
             @panic("unexpected error");
         }
         pub fn setStopped(self: *@This()) void {
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             t.allocator.destroy(self.operation);
             self.called = true;
         }

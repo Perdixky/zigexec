@@ -141,20 +141,23 @@ test "letError can recover asynchronously with multiple success values" {
     try testing.expect(result[1]);
 }
 
-test "completion may destroy the operation including inline whenAll parent" {
+test "setFinished may destroy the connection including inline whenAll parent" {
     const sender = ex.whenAll(.{
         ex.just(.{21}).then(ex.Fn(double), .{}),
         ex.just(.{}).startsOn(ex.InlineScheduler{}),
     });
-    const Operation = @TypeOf(sender).Operation;
+    const Operation = ex.Connection(@TypeOf(sender));
     const Destroy = struct {
         operation: *Operation,
         called: bool = false,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), values: Ints) void {
-            std.debug.assert(values[0] == 42);
+        pub fn setValue(self: *@This(), values: *const Ints) void {
+            std.debug.assert(values.*[0] == 42);
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             testing.allocator.destroy(self.operation);
             self.called = true;
         }

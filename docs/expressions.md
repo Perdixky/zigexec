@@ -21,7 +21,7 @@ const task = source.letValue(
 | `ex.upstream()` | 最近一层 `letValue` 的成功值；尚未绑定输入的子链起点 |
 | `.then(Callback, args)` | 初始化捕获，执行同步 `call`，把结果传给下一步 |
 | `.letValue(Factory, args)` | 初始化捕获，执行返回 sender 的工厂，等待子 sender 完成 |
-| `.letValue(body, .{})` | 存储当前成功值，在稳定地址绑定并启动 `upstream()` 子链 |
+| `.letValue(body, .{})` | 借用上游 operation 的成功值，绑定并启动 `upstream()` 子链 |
 | `.letValue(child, .{})` | 上游成功后连接并启动已有 sender，不向它注入上游值 |
 
 实际签名：
@@ -85,9 +85,9 @@ sender.bulk(count, Fill, .{buffer})
 
 ## 存储与异步借用
 
-构造表达式只保存状态；`connect` 不执行业务逻辑。`start` 后，上游完成时，scope 把成功 tuple 存入 operation，再构造并连接子链。上游 operation、scope 输入和各节点的 callback 存储持续存在到下游完成。operation 启动后必须保持地址稳定；最终完成回调可以销毁它。
+构造表达式只保存状态；`connect` 不执行业务逻辑。`start` 后，上游把成功 tuple 存入自己的 operation；scope 借用其地址，构造并连接子链，不再重复保存输入。operation 启动后必须保持地址稳定。根 connection 保留全部存储，直到完成处理的执行入口退出，再调用 setFinished 允许回收。见 [生命周期协议](lifetimes.md)。
 
-`upstream()` 统一按值传递成功 tuple。跨异步使用的动态 buffer 可以通过 allocator 显式分配，再以 slice 传递。slice 的复制只复制地址和长度，底层分配地址不变；其拥有者负责保持内存有效并最终释放。
+`upstream()` 在框架内部按引用转发成功 tuple，业务 callback 仍使用其声明的参数类型。跨异步使用的动态 buffer 可以通过 allocator 显式分配，再以 slice 传递。slice 的复制只复制地址和长度，底层分配地址不变；其拥有者负责保持内存有效并最终释放。
 
 ```zig
 const Write = struct {

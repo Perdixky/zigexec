@@ -16,7 +16,7 @@ pub fn WithStopToken(comptime S: type) type {
             upstream_stop: c.StopCallback = .{},
             added_stop: c.StopCallback = .{},
             child: S.Operation = undefined,
-            result: c.Completion(Values) = undefined,
+            result: c.CompletionRef(Values) = undefined,
             remaining: std.atomic.Value(usize) = .init(2),
             started: bool = false,
             const Op = @This();
@@ -31,6 +31,9 @@ pub fn WithStopToken(comptime S: type) type {
             }
             fn requestStop(ctx: *anyopaque) void {
                 const self: *Op = @ptrCast(@alignCast(ctx));
+                const scope = self.receiver.env.scope;
+                c.Scope.acquire(scope);
+                defer c.Scope.release(scope);
                 if (!retainUnlessDone(&self.remaining)) return;
                 _ = self.stop.requestStop();
                 self.release();
@@ -38,7 +41,7 @@ pub fn WithStopToken(comptime S: type) type {
             pub fn getEnv(self: *Op) c.Env {
                 return self.receiver.env.withStopToken(self.stop.token());
             }
-            fn complete(self: *Op, result: c.Completion(Values)) void {
+            fn complete(self: *Op, result: c.CompletionRef(Values)) void {
                 self.result = result;
                 self.release();
             }
@@ -47,9 +50,9 @@ pub fn WithStopToken(comptime S: type) type {
                 self.upstream_stop.deinit();
                 self.added_stop.deinit();
                 self.stop.deinit();
-                self.receiver.complete(self.result);
+                self.receiver.completeRef(self.result);
             }
-            pub fn setValue(self: *Op, values: Values) void {
+            pub fn setValue(self: *Op, values: *const Values) void {
                 self.complete(.{ .value = values });
             }
             pub fn setError(self: *Op, err: anyerror) void {

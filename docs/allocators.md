@@ -73,13 +73,13 @@ readAllocator 的具体类型为 ex.ReadAllocator，输出单个 std.mem.Allocat
 
 ## 分配来源与资源生命周期
 
-Env 借用 allocator，不拥有它，也不是 arena 或资源登记表。分配出的临时资源由相应 operation 释放；转交给最终调用方的拥有型结果由调用方释放。异常和停止路径也必须收尾。完成回调可能立即销毁 operation，因此临时资源应在最终完成通知前清理。
+Env 借用 allocator，不拥有它，也不是 arena 或资源登记表。分配出的临时资源由相应 operation 释放；转交给最终调用方的拥有型结果由调用方释放。异常和停止路径也必须收尾。根 connection 在 setFinished 才允许回收；临时资源应在所属执行入口退出之前清理，已经发布给下游的结果存储则保持到作用域结束。
 
 syncWait 不统一释放所有分配，也不创建并自动销毁内部 arena；否则返回的 slice/指针可能立即失效。allocator 的底层状态需要活过任务和所有尚未释放的结果。
 
 整个任务使用 arena 时，由调用方提供其 allocator，并在所有结果消费完后释放 arena。并行分支可能同时分配，allocator 必须支持相应的并发访问；普通 ArenaAllocator 不能直接假定线程安全。
 
-upstream 始终按值传递。分配后的 buffer 以 slice 传递即可，复制 slice 不移动底层内存；底层分配仍由指定拥有者保持和释放。内联数组按值传递会复制内容，不能把回调局部数组副本的地址借给异步任务。
+upstream 在库内部借用 operation 中的完成 tuple，业务函数仍按声明的参数类型接收值。分配后的 buffer 以 slice 传递即可，复制 slice 不移动底层内存；底层分配仍由指定拥有者保持和释放。内联数组按值传递会复制内容，不能把回调局部数组副本的地址借给异步任务。
 
 ## 共享执行与执行上下文
 

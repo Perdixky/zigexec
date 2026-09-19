@@ -49,7 +49,7 @@ pub fn connect(self: Self, receiver: Receiver(Values)) Operation;
 
 Operation 提供 `start(self: *Operation) void`，只能调用一次。成功、错误、停止恰好选择一个通道；receiver 的方法返回 `void`。用户 receiver 必须通过 `getEnv()` 暴露 Env；Env 的 allocator 必填，stop token 可选。
 
-Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引用的值；`start` 在最终地址原地连接子操作。启动后不可移动/复制，完成调用之后实现不能再访问自身，因此 receiver 可在完成回调中释放 operation。
+Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引用的值；`start` 在最终地址原地连接子操作。启动后不可移动/复制。公开 ex.connect 返回 Connection(S)，通过执行作用域把结果完成与存储回收分开：setValue 接收 *const Values，根 receiver 在 setFinished 才能回收。详见 [生命周期协议](lifetimes.md)。
 
 `connect` 是不可失败的协议。需要资源分配时在显式构造函数返回错误，或在启动后通过 error 通道报告。未启动的普通 operation 不持有需要析构的资源；Shared view 在 `start` 才取得状态引用。
 
@@ -71,7 +71,7 @@ Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引�
 
 回调参数是编译期 struct 类型，状态通过 tuple 或命名字段显式初始化；call 的 self 可为值或指向 operation 内存储的指针。普通函数用 `Fn(function)` 适配。没有隐式捕获；共享可变状态显式传指针。
 
-`letValue(body, .{})` 引入输入作用域，body 是带运行时捕获的 deferred 表达式。`upstream()` 绑定最近一层 scope 的完成值并按值传递；需要稳定的动态 buffer 时，显式分配并传递 slice。callback 工厂仅返回一个 sender，整条子链直接组合并推导。详见 [表达式与生命周期](expressions.md)。
+`letValue(body, .{})` 引入输入作用域，body 是带运行时捕获的 deferred 表达式。`upstream()` 绑定最近一层 scope 的完成值并借用其稳定存储；需要稳定的动态 buffer 时，显式分配并传递 slice。callback 工厂仅返回一个 sender，整条子链直接组合并推导。详见 [表达式与生命周期](expressions.md)。
 
 每个 sender 有一个静态成功 tuple，错误统一为 `anyerror`，stopped 独立。`syncWait` 返回 `anyerror!?Values`。回调 `void/!void` 成功产生空 tuple，`T/!T` 成功产生单元素 tuple。恢复分支必须保持成功 tuple 类型，异形结果可作为 tagged union 值传递。
 
@@ -128,6 +128,6 @@ io_uring 将后端状态嵌入 Request，单独的 submission/completion 模块�
 
 ## 当前边界
 
-`letValue` 保留上游 operation、输入和工厂状态到子任务完成；已有 sender 形式按顺序启动子任务，deferred 形式绑定最近一层输入。所有外部指针/slice/句柄默认借用；scope 不延长工厂栈局部变量或外部资源的生命周期，内部借用不得越过所属 operation 的销毁。资源清理由调用方显式安排。析构不是 Zig 值的隐式行为，组合算法不会自动对丢弃的用户值调用 `deinit`。
+`letValue` 保留上游 operation 和工厂状态，借用其输入；整个根 connection 保留到执行入口退出；已有 sender 形式按顺序启动子任务，deferred 形式绑定最近一层输入。所有外部指针/slice/句柄默认借用；scope 不延长工厂栈局部变量或外部资源的生命周期，内部借用不得越过所属 operation 的销毁。资源清理由调用方显式安排。析构不是 Zig 值的隐式行为，组合算法不会自动对丢弃的用户值调用 `deinit`。
 
 尚未提供环境作用域恢复的 `on`、`whenAny`、通用 timeout 组合、`async_scope`、共享状态自定义值析构策略、协程/GPU 或其他平台后端。下一步可以基于已有取消注册与 I/O 协议实现这些能力，而不必改写核心生命周期模型。

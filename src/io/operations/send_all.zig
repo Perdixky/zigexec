@@ -16,6 +16,7 @@ pub fn SendAll(comptime Context: type) type {
             sender: Self,
             receiver: ex.Receiver(Values),
             offset: usize = 0,
+            output: Values = .{0},
             child: Loop.Operation = undefined,
             started: bool = false,
             const Op = @This();
@@ -41,7 +42,7 @@ pub fn SendAll(comptime Context: type) type {
                 std.debug.assert(!self.started);
                 self.started = true;
                 if (self.receiver.env.stop_token.stopRequested()) return self.receiver.setStopped();
-                if (self.sender.buffer.len == 0) return self.receiver.setValue(.{0});
+                if (self.sender.buffer.len == 0) return self.receiver.setValue(&self.output);
                 const loop = ex.just(.{}).letValue(Next, .{self}).then(Advance, .{self}).repeatEffectUntil();
                 self.child = loop.connect(ex.Receiver(ex.Values(.{})).init(self));
                 self.child.start();
@@ -49,8 +50,9 @@ pub fn SendAll(comptime Context: type) type {
             pub fn getEnv(self: *Op) ex.Env {
                 return self.receiver.env;
             }
-            pub fn setValue(self: *Op, _: ex.Values(.{})) void {
-                self.receiver.setValue(.{self.offset});
+            pub fn setValue(self: *Op, _: *const ex.Values(.{})) void {
+                self.output = .{self.offset};
+                self.receiver.setValue(&self.output);
             }
             pub fn setError(self: *Op, err: anyerror) void {
                 self.receiver.setError(err);

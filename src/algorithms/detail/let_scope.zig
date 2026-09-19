@@ -27,7 +27,6 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
             body: Body,
             receiver: c.Receiver(Values),
             child: S.Operation = undefined,
-            input: S.Values = undefined,
             next: Next.Operation = undefined,
             started: bool = false,
             const Op = @This();
@@ -40,12 +39,11 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
             pub fn getEnv(self: *Op) c.Env {
                 return self.receiver.env;
             }
-            pub fn setValue(self: *Op, values: S.Values) void {
-                self.input = values;
-                const next = if (comptime isExpression(Body)) self.body.bindInput(&self.input) else self.body;
+            pub fn setValue(self: *Op, values: *const S.Values) void {
+                const next = if (comptime isExpression(Body)) self.body.bindInput(values) else self.body;
                 self.next = next.connect(self.receiver);
                 self.next.start();
-                // Completion may destroy self: do not touch it after start.
+                // Input storage remains in child until the enclosing scope retires.
             }
             pub fn setError(self: *Op, err: anyerror) void {
                 self.receiver.setError(err);

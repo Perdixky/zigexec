@@ -12,7 +12,7 @@ pub fn Immediate(comptime V: type) type {
             pub fn start(self: *@This()) void {
                 std.debug.assert(!self.started);
                 self.started = true;
-                self.receiver.complete(self.result);
+                self.receiver.complete(&self.result);
             }
         };
         pub fn connect(self: Self, receiver: c.Receiver(V)) Operation {

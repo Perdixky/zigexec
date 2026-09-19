@@ -14,13 +14,13 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
             receiver: c.Receiver(Values),
             child: S.Operation = undefined,
             transfer: ScheduledSender.Operation = undefined,
-            result: c.Completion(Values) = undefined,
+            result: c.CompletionRef(Values) = undefined,
             started: bool = false,
             const Op = @This();
             const TransferReceiver = struct {
-                fn value(ctx: *anyopaque, _: ScheduledSender.Values) void {
+                fn value(ctx: *anyopaque, _: *const ScheduledSender.Values) void {
                     const op: *Op = @ptrCast(@alignCast(ctx));
-                    op.receiver.complete(op.result);
+                    op.receiver.completeRef(op.result);
                 }
                 fn err(ctx: *anyopaque, e: anyerror) void {
                     const op: *Op = @ptrCast(@alignCast(ctx));
@@ -40,7 +40,7 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
             pub fn getEnv(self: *Op) c.Env {
                 return self.receiver.env;
             }
-            fn forward(self: *Op, result: c.Completion(Values)) void {
+            fn forward(self: *Op, result: c.CompletionRef(Values)) void {
                 self.result = result;
                 self.transfer = schedule(self.scheduler).connect(.{
                     .context = self,
@@ -51,7 +51,7 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
                 });
                 self.transfer.start();
             }
-            pub fn setValue(self: *Op, values: Values) void {
+            pub fn setValue(self: *Op, values: *const Values) void {
                 self.forward(.{ .value = values });
             }
             pub fn setError(self: *Op, err: anyerror) void {

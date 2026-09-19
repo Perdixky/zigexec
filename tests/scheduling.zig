@@ -106,7 +106,7 @@ test "runLoop can be driven on caller thread with manual receiver" {
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), _: Empty) void {
+        pub fn setValue(self: *@This(), _: *const Empty) void {
             self.called = true;
             self.loop.finish();
         }
@@ -142,8 +142,9 @@ test "custom sender and scheduler interoperate with free and fluent algorithms" 
         pub const Values = Ints;
         pub const Operation = struct {
             receiver: ex.Receiver(Values),
+            output: Values = .{21},
             pub fn start(self: *@This()) void {
-                self.receiver.setValue(.{21});
+                self.receiver.setValue(&self.output);
             }
         };
         pub fn connect(_: @This(), receiver: ex.Receiver(Values)) Operation {

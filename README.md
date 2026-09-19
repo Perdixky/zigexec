@@ -253,6 +253,21 @@ success tuple, errors use `anyerror`, and `on` environment restoration,
 `whenAny`, `async_scope`, GPU integration, coroutine integration, additional
 platform backends, and comprehensive benchmarks are not yet provided.
 
+## Operation lifetimes
+
+Completion values are borrowed from stable operation storage. Internal forwarding
+through `letValue`, `upstream`, `continuesOn`, and stop wrappers avoids payload
+copies. Callback arguments retain their declared types; owned result boundaries
+such as `syncWait` and `split` still copy values when needed.
+
+For custom senders/receivers, `setValue` now takes `*const Values`.
+`ex.connect` returns `ex.Connection(S)`, which owns the raw `S.Operation` and an
+execution scope. Retire the connection in `setFinished`, after execution entries
+have exited, never in `setValue`/`setError`/`setStopped`. Custom asynchronous
+senders acquire `Env.scope` before publishing work and release it after their
+last operation access. `syncWait` waits for this retirement boundary, and repeat
+algorithms wait before reusing child storage. See [the lifetime protocol](docs/lifetimes.md).
+
 ## Documentation
 
 The complete Chinese design notes cover:

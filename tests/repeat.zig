@@ -90,16 +90,19 @@ test "repeatEffectUntil supports deferred expression composition" {
     try t.expectEqual(null, try ex.just(.{}).letValue(ex.upstream().repeatEffect(), .{}).withStopToken(stop.token()).syncWait(.{ .allocator = std.testing.allocator }));
 }
 
-test "terminal completion can destroy the repeating operation" {
+test "terminal retirement can destroy the repeating connection" {
     const task = ex.just(true).repeatEffectUntil();
-    const Op = @TypeOf(task).Operation;
+    const Op = ex.Connection(@TypeOf(task));
     const Receiver = struct {
         operation: *Op,
         done: bool = false,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), _: ex.Values(.{})) void {
+        pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             t.allocator.destroy(self.operation);
             self.done = true;
         }
@@ -133,18 +136,21 @@ test "cancellation reaches an asynchronous effect already waiting for stop" {
     try t.expectEqual(null, try task.syncWait(.{ .allocator = std.testing.allocator }));
 }
 
-test "asynchronous final receiver may destroy a repeating operation" {
+test "asynchronous retirement may destroy a repeating connection" {
     const pool = try ex.ThreadPool.init(t.allocator, 2);
     defer pool.deinit();
     const task = ex.just(true).startsOn(pool.getScheduler()).repeatEffectUntil();
-    const Op = @TypeOf(task).Operation;
+    const Op = ex.Connection(@TypeOf(task));
     const Receiver = struct {
         operation: *Op,
         done: support.Event = .{},
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), _: ex.Values(.{})) void {
+        pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             t.allocator.destroy(self.operation);
             self.done.set();
         }

@@ -175,9 +175,11 @@ test "upstream operation storage stays alive through scoped continuation" {
         pub const Values = ex.Values(.{[]const u8});
         pub const Operation = struct {
             receiver: ex.Receiver(Values),
+            output: Values = undefined,
             buffer: [3]u8 = .{ 20, 21, 1 },
             pub fn start(self: *@This()) void {
-                self.receiver.setValue(.{&self.buffer});
+                self.output = .{&self.buffer};
+                self.receiver.setValue(&self.output);
             }
         };
         pub fn connect(_: @This(), receiver: ex.Receiver(Values)) Operation {
@@ -229,17 +231,20 @@ test "expression recovery and bulk preserve error stopped and environment semant
     try t.expectEqual(null, try ex.just(1).letValue(body, .{}).withStopToken(source.token()).syncWait(.{ .allocator = std.testing.allocator }));
 }
 
-test "inline scoped completion may destroy the entire operation" {
+test "scoped connection may be destroyed in setFinished" {
     const task = ex.just(20).letValue(ex.upstream().letValue(Duplicate, .{}).then(Add, .{2}), .{});
-    const Op = @TypeOf(task).Operation;
+    const Op = ex.Connection(@TypeOf(task));
     const Destroy = struct {
         op: *Op,
         called: bool = false,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), values: ex.Values(.{i64})) void {
-            std.debug.assert(values[0] == 42);
+        pub fn setValue(self: *@This(), values: *const ex.Values(.{i64})) void {
+            std.debug.assert(values.*[0] == 42);
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             t.allocator.destroy(self.op);
             self.called = true;
         }

@@ -4,11 +4,13 @@ pub const ReadEnv = struct {
     pub const Values = @Tuple(&.{c.Env});
     pub const Operation = struct {
         receiver: c.Receiver(Values),
+        output: Values = undefined,
         started: bool = false,
         pub fn start(self: *@This()) void {
             std.debug.assert(!self.started);
             self.started = true;
-            self.receiver.setValue(.{self.receiver.env});
+            self.output = .{self.receiver.env};
+            self.receiver.setValue(&self.output);
         }
     };
     pub fn connect(_: ReadEnv, receiver: c.Receiver(Values)) Operation {

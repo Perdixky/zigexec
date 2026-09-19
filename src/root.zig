@@ -39,6 +39,8 @@ pub const StopToken = core.StopToken;
 pub const StopCallback = core.StopCallback;
 pub const Completion = core.Completion;
 pub const Receiver = core.Receiver;
+pub const Connection = @import("execution/connect.zig").Connection;
+pub const Scope = core.Scope;
 pub const connect = core.connect;
 pub const start = core.start;
 pub fn just(values: anytype) Immediate(@import("detail/tuple.zig").ValueTuple(@TypeOf(values))) {

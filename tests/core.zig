@@ -50,22 +50,25 @@ test "all completion channels are distinct including empty success" {
     try testing.expectEqual(1, stopped.completions);
 }
 
-test "completion may destroy asynchronous operation while worker unwinds" {
+test "setFinished may destroy an asynchronous connection" {
     const pool = try ex.ThreadPool.init(testing.allocator, 2);
     defer pool.deinit();
     const sender = ex.whenAll(.{
         ex.just(.{21}).startsOn(pool.getScheduler()).then(ex.Fn(double), .{}),
         ex.schedule(pool.getScheduler()),
     });
-    const Operation = @TypeOf(sender).Operation;
+    const Operation = ex.Connection(@TypeOf(sender));
     const Destroy = struct {
         operation: *Operation,
         finished: Event = .{},
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), values: Ints) void {
-            std.debug.assert(values[0] == 42);
+        pub fn setValue(self: *@This(), values: *const Ints) void {
+            std.debug.assert(values.*[0] == 42);
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             testing.allocator.destroy(self.operation);
             self.finished.set();
         }

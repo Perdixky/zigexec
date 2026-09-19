@@ -23,6 +23,7 @@ const Allocating = struct {
     pub const Operation = struct {
         outcome: @FieldType(Allocating, "outcome"),
         receiver: ex.Receiver(Values),
+        output: Values = undefined,
         fn work(allocator: std.mem.Allocator) !usize {
             const first = try allocator.alloc(u8, 32);
             defer allocator.free(first);
@@ -34,8 +35,9 @@ const Allocating = struct {
         }
         pub fn start(self: *@This()) void {
             const count = work(self.receiver.getEnv().getAllocator()) catch |err| return self.receiver.setError(err);
+            self.output = .{count};
             switch (self.outcome) {
-                .value => self.receiver.setValue(.{count}),
+                .value => self.receiver.setValue(&self.output),
                 .err => self.receiver.setError(error.AfterAllocation),
                 .stopped => self.receiver.setStopped(),
             }
@@ -88,8 +90,8 @@ test "custom terminal receiver supplies allocator without syncWait" {
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = t.allocator };
         }
-        pub fn setValue(self: *@This(), value: Allocating.Values) void {
-            self.result = value[0];
+        pub fn setValue(self: *@This(), value: *const Allocating.Values) void {
+            self.result = value.*[0];
         }
         pub fn setError(_: *@This(), _: anyerror) void {
             @panic("unexpected failure");

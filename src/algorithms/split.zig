@@ -18,7 +18,7 @@ pub fn Shared(comptime S: type) type {
             references: std.atomic.Value(usize) = .init(1),
             mutex: sync.Mutex = .{},
             upstream: S,
-            operation: S.Operation = undefined,
+            operation: @import("../execution/connect.zig").Connection(S) = undefined,
             stop: c.StopSource = .{},
             started: bool = false,
             result: ?Result = null,
@@ -46,14 +46,16 @@ pub fn Shared(comptime S: type) type {
                 self.mutex.unlock();
                 while (waiters) |waiter| {
                     waiters = waiter.next;
-                    waiter.finish(result);
+                    waiter.finish(&self.result.?);
                 }
                 // The upstream reference keeps State alive throughout notification,
                 // including reentrant subscriptions and owner destruction.
+            }
+            pub fn setFinished(self: *State) void {
                 self.release();
             }
-            pub fn setValue(self: *State, values: Values) void {
-                self.complete(.{ .value = values });
+            pub fn setValue(self: *State, values: *const Values) void {
+                self.complete(.{ .value = values.* });
             }
             pub fn setError(self: *State, err: anyerror) void {
                 self.complete(.{ .err = err });
@@ -70,6 +72,7 @@ pub fn Shared(comptime S: type) type {
                 state: *State,
                 receiver: c.Receiver(S.Values),
                 next: ?*@This() = null,
+                result: Result = undefined,
                 stop_callback: c.StopCallback = .{},
                 started: bool = false,
                 const Op = @This();
@@ -77,10 +80,11 @@ pub fn Shared(comptime S: type) type {
                     std.debug.assert(!self.started);
                     self.started = true;
                     const state = self.state;
+                    c.Scope.acquire(self.receiver.env.scope);
                     state.retain(); // This subscription owns State until finish.
                     self.stop_callback.init(self.receiver.env.stop_token, self, cancel);
                     state.mutex.lock();
-                    if (state.result) |result| {
+                    if (state.result) |*result| {
                         state.mutex.unlock();
                         self.finish(result);
                         return;
@@ -94,23 +98,29 @@ pub fn Shared(comptime S: type) type {
                     state.waiters = self;
                     state.mutex.unlock();
                     if (first) {
-                        state.operation = state.upstream.connect(c.Receiver(S.Values).init(state));
+                        state.operation = c.connect(state.upstream, state);
                         state.operation.start();
                     }
                 }
                 fn cancel(ctx: *anyopaque) void {
                     const self: *Op = @ptrCast(@alignCast(ctx));
+                    const scope = self.receiver.env.scope;
+                    c.Scope.acquire(scope);
+                    defer c.Scope.release(scope);
                     const state = self.state;
                     state.retain();
                     _ = state.stop.requestStop();
                     state.release();
                 }
-                fn finish(self: *Op, result: Result) void {
+                fn finish(self: *Op, result: *const Result) void {
                     const receiver = self.receiver;
+                    const scope = receiver.env.scope;
                     const state = self.state;
+                    self.result = result.*;
                     self.stop_callback.deinit();
                     state.release();
-                    receiver.complete(result);
+                    receiver.complete(&self.result);
+                    c.Scope.release(scope);
                 }
             };
             pub fn connect(self: View, receiver: c.Receiver(S.Values)) Operation {

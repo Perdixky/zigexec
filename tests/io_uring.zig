@@ -95,7 +95,7 @@ test "shutdown cancels outstanding work and rejects new submissions" {
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: @Tuple(&.{})) void {
+        pub fn setValue(_: *@This(), _: *const @Tuple(&.{})) void {
             @panic("unexpected timer expiration");
         }
         pub fn setError(_: *@This(), _: anyerror) void {
@@ -103,6 +103,8 @@ test "shutdown cancels outstanding work and rejects new submissions" {
         }
         pub fn setStopped(self: *@This()) void {
             self.stopped = true;
+        }
+        pub fn setFinished(self: *@This()) void {
             self.done.set();
         }
     };
@@ -156,27 +158,24 @@ test "queue pressure flushes blocking receives before their later send" {
         remaining: std.atomic.Value(usize) = .init(count),
         failed: std.atomic.Value(bool) = .init(false),
         done: Event = .{},
-        fn finish(self: *@This()) void {
+        pub fn setFinished(self: *@This()) void {
             if (self.remaining.fetchSub(1, .acq_rel) == 1) self.done.set();
         }
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), value: @Tuple(&.{usize})) void {
-            if (value[0] != 1) self.failed.store(true, .release);
-            self.finish();
+        pub fn setValue(self: *@This(), value: *const @Tuple(&.{usize})) void {
+            if (value.*[0] != 1) self.failed.store(true, .release);
         }
         pub fn setError(self: *@This(), _: anyerror) void {
             self.failed.store(true, .release);
-            self.finish();
         }
         pub fn setStopped(self: *@This()) void {
             self.failed.store(true, .release);
-            self.finish();
         }
     };
     var receiver: Receiver = .{};
-    const Operation = @TypeOf(ex.io.recv(context, sockets[0], &buffers[0], 0)).Operation;
+    const Operation = ex.Connection(@TypeOf(ex.io.recv(context, sockets[0], &buffers[0], 0)));
     var operations: [count]Operation = undefined;
     for (&operations, &buffers) |*operation, *buffer| {
         operation.* = ex.connect(ex.io.recv(context, sockets[0], buffer, 0), &receiver);
@@ -197,13 +196,16 @@ test "repeated in-flight cancellation safely reuses operation addresses" {
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: @Tuple(&.{})) void {
+        pub fn setValue(_: *@This(), _: *const @Tuple(&.{})) void {
             @panic("timer unexpectedly elapsed");
         }
         pub fn setError(_: *@This(), _: anyerror) void {
             @panic("unexpected timer error");
         }
         pub fn setStopped(self: *@This()) void {
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             self.done.set();
         }
     };
@@ -219,18 +221,21 @@ test "repeated in-flight cancellation safely reuses operation addresses" {
     }
 }
 
-test "I/O completion may release its operation immediately" {
+test "I/O setFinished may release its root connection" {
     const context = try ex.IoUring.init(t.allocator, .{});
     defer context.deinit();
     const sender = ex.io.sleepFor(context, std.time.ns_per_ms);
-    const Operation = @TypeOf(sender).Operation;
+    const Operation = ex.Connection(@TypeOf(sender));
     const Receiver = struct {
         operation: *Operation,
         done: Event = .{},
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), _: @Tuple(&.{})) void {
+        pub fn setValue(self: *@This(), _: *const @Tuple(&.{})) void {
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             t.allocator.destroy(self.operation);
             self.done.set();
         }
@@ -257,7 +262,10 @@ test "a shared timer executes once and survives owner release during pending I/O
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(self: *@This(), _: @Tuple(&.{})) void {
+        pub fn setValue(self: *@This(), _: *const @Tuple(&.{})) void {
+            _ = self;
+        }
+        pub fn setFinished(self: *@This()) void {
             self.done.set();
         }
         pub fn setError(_: *@This(), _: anyerror) void {

@@ -31,8 +31,8 @@ pub const IntCapture = struct {
     pub fn getEnv(_: *@This()) ex.Env {
         return .{ .allocator = std.testing.allocator };
     }
-    pub fn setValue(self: *@This(), values: Ints) void {
-        self.values = values;
+    pub fn setValue(self: *@This(), values: *const Ints) void {
+        self.values = values.*;
         self.completions += 1;
     }
     pub fn setError(self: *@This(), err: anyerror) void {
@@ -55,12 +55,15 @@ pub const AwaitStop = struct {
         callback: ex.StopCallback = .{},
         pub fn start(self: *@This()) void {
             const entered = self.entered;
+            ex.Scope.acquire(self.receiver.env.scope);
             self.callback.init(self.receiver.env.stop_token, self, canceled);
             if (entered) |event| event.set();
         }
         fn canceled(ctx: *anyopaque) void {
             const self: *@This() = @ptrCast(@alignCast(ctx));
             const receiver = self.receiver;
+            const scope = receiver.env.scope;
+            defer ex.Scope.release(scope);
             self.callback.deinit();
             receiver.setStopped();
         }

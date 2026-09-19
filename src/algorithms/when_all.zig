@@ -18,7 +18,7 @@ fn AllValues(comptime Senders: type) type {
 fn ChildTuple(comptime Senders: type, comptime results: bool) type {
     const fields = @typeInfo(Senders).@"struct".field_types;
     var types: [fields.len]type = undefined;
-    for (fields, 0..) |f, i| types[i] = if (results) c.Completion(f.Values) else f.Operation;
+    for (fields, 0..) |f, i| types[i] = if (results) c.CompletionRef(f.Values) else f.Operation;
     return @Tuple(&types);
 }
 
@@ -33,6 +33,7 @@ pub fn WhenAll(comptime Senders: type) type {
             senders: Senders,
             receiver: c.Receiver(V),
             children: ChildTuple(Senders, false) = undefined,
+            output: V = undefined,
             results: ChildTuple(Senders, true) = undefined,
             stop: c.StopSource = .{},
             parent_stop: c.StopCallback = .{},
@@ -48,7 +49,7 @@ pub fn WhenAll(comptime Senders: type) type {
                 self.parent_stop.init(self.receiver.env.stop_token, self, requestStop);
                 inline for (self.senders, 0..) |sender, i| {
                     const Child = struct {
-                        fn value(ctx: *anyopaque, values: @TypeOf(sender).Values) void {
+                        fn value(ctx: *anyopaque, values: *const @TypeOf(sender).Values) void {
                             const op: *Op = @ptrCast(@alignCast(ctx));
                             op.results[i] = .{ .value = values };
                             op.finishOne();
@@ -80,6 +81,9 @@ pub fn WhenAll(comptime Senders: type) type {
             }
             fn requestStop(ctx: *anyopaque) void {
                 const self: *Op = @ptrCast(@alignCast(ctx));
+                const scope = self.receiver.env.scope;
+                c.Scope.acquire(scope);
+                defer c.Scope.release(scope);
                 if (!retainUnlessDone(&self.remaining)) return;
                 _ = self.stop.requestStop();
                 self.finishOne();
@@ -96,13 +100,12 @@ pub fn WhenAll(comptime Senders: type) type {
                 inline for (self.results) |result| {
                     if (result == .stopped) return self.receiver.setStopped();
                 }
-                var values: V = undefined;
                 comptime var offset = 0;
                 inline for (self.results) |result| {
-                    inline for (result.value, 0..) |v, j| values[offset + j] = v;
-                    offset += @typeInfo(@TypeOf(result.value)).@"struct".field_types.len;
+                    inline for (result.value.*, 0..) |v, j| self.output[offset + j] = v;
+                    offset += @typeInfo(@TypeOf(result.value.*)).@"struct".field_types.len;
                 }
-                self.receiver.setValue(values);
+                self.receiver.setValue(&self.output);
             }
         };
         pub fn connect(self: Self, receiver: c.Receiver(V)) Operation {

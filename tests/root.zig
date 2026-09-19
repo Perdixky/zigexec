@@ -1,4 +1,5 @@
 test {
+    _ = @import("lifetime.zig");
     _ = @import("repeat.zig");
     _ = @import("allocator.zig");
     _ = @import("expressions.zig");

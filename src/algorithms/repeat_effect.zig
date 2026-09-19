@@ -2,7 +2,8 @@ const std = @import("std");
 const c = @import("../execution/protocol.zig");
 
 /// Reconnect the effect after each successful completion. One drain owner
-/// serializes restarts; inline completion queues work instead of recursing.
+/// serializes restarts; iteration-scope retirement queues work, so an old
+/// completion handler exits before its operation storage is reconstructed.
 pub fn Repeat(comptime S: type, comptime until: bool) type {
     const fields = @typeInfo(S.Values).@"struct".field_types;
     if (until) {
@@ -17,46 +18,56 @@ pub fn Repeat(comptime S: type, comptime until: bool) type {
         pub const Operation = struct {
             sender: S,
             receiver: c.Receiver(Values),
+            iteration: c.Scope = .{ .on_idle = iterationFinished },
             child: S.Operation = undefined,
             work: std.atomic.Value(usize) = .init(0),
+            output: Values = .{},
             action: union(enum) { again, finish: c.Completion(Values) } = .again,
             started: bool = false,
             const Op = @This();
             pub fn start(self: *Op) void {
                 std.debug.assert(!self.started);
                 self.started = true;
+                self.iteration.context = self;
+                self.iteration.parent = self.receiver.env.scope;
                 self.drain();
             }
             pub fn getEnv(self: *Op) c.Env {
-                return self.receiver.env;
+                return self.receiver.env.withScope(&self.iteration);
             }
             fn drain(self: *Op) void {
                 if (self.work.fetchAdd(1, .acq_rel) != 0) return;
                 while (true) {
                     switch (self.action) {
-                        .finish => |result| return self.receiver.complete(result),
+                        .finish => |result| return switch (result) {
+                            .value => self.receiver.setValue(&self.output),
+                            .err => |err| self.receiver.setError(err),
+                            .stopped => self.receiver.setStopped(),
+                        },
                         .again => {},
                     }
                     if (self.receiver.env.stop_token.stopRequested())
                         return self.receiver.setStopped();
+                    self.iteration.enter();
                     self.child = self.sender.connect(c.Receiver(S.Values).init(self));
                     self.child.start();
-                    // A child may have completed inline or on another thread.
-                    // Releasing the drain owner is the final access when idle:
-                    // a concurrent completion may immediately destroy this op.
+                    self.iteration.leave();
+                    // A child scope may have retired inline or on another thread.
+                    // The caller's scope entry protects the drain until it exits.
                     if (self.work.fetchSub(1, .acq_rel) == 1) return;
                 }
             }
-            pub fn setValue(self: *Op, values: S.Values) void {
-                self.action = if (until and values[0]) .{ .finish = .{ .value = .{} } } else .again;
-                self.drain();
+            pub fn setValue(self: *Op, values: *const S.Values) void {
+                self.action = if (until and values.*[0]) .{ .finish = .{ .value = .{} } } else .again;
             }
             pub fn setError(self: *Op, err: anyerror) void {
                 self.action = .{ .finish = .{ .err = err } };
-                self.drain();
             }
             pub fn setStopped(self: *Op) void {
                 self.action = .{ .finish = .stopped };
+            }
+            fn iterationFinished(ctx: *anyopaque) void {
+                const self: *Op = @ptrCast(@alignCast(ctx));
                 self.drain();
             }
         };

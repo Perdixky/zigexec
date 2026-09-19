@@ -1,3 +1,5 @@
+pub const CompletionRef = @import("completion_ref.zig").CompletionRef;
+pub const Scope = @import("scope.zig").Scope;
 pub const Env = @import("environment.zig").Env;
 pub const Completion = @import("completion.zig").Completion;
 pub const Receiver = @import("receiver.zig").Receiver;

@@ -42,7 +42,7 @@ effect 必须成功完成为 **一个 bool**：false 重复，true 结束并产�
 
 重新连接会从原 sender 描述创建新的子 operation；callback 的按值捕获会随之重新初始化。跨轮累积状态通过显式指针或稳定的外部拥有者保存，示例中的 count 就是这种状态。allocator 和 stop token 从最终 receiver 转发。
 
-同步完成由循环驱动，不递归调用下一轮 start；异步完成通过原子计数转交驱动权。任一时刻只有一个子任务，完成通知后才复用其 operation 存储。测试覆盖同步十万轮、跨线程完成、取消、错误以及最终 receiver 销毁 operation。
+同步完成由循环驱动，不递归调用下一轮 start；异步完成通过原子计数转交驱动权。任一时刻只有一个子任务，该轮 completion 处理退出、子作用域空闲后才复用其 operation 存储。测试覆盖同步十万轮、跨线程完成、取消、错误以及最终 receiver 在 setFinished 回收 connection。
 
 算法不自动更换线程或插入调度点。纯同步的无限 effect 会持续占用当前线程，需要公平调度时，应在 effect 内显式加入 scheduler。正常的 io_uring effect 会在等 I/O 时归还执行权。
 

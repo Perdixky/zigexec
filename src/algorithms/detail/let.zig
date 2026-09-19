@@ -26,7 +26,6 @@ pub fn Let(comptime S: type, comptime F: type, comptime channel: Channel) type {
             sender: S,
             callback: F,
             receiver: c.Receiver(V),
-            input: Args = undefined,
             child: S.Operation = undefined,
             next: Next.Operation = undefined,
             started: bool = false,
@@ -41,8 +40,7 @@ pub fn Let(comptime S: type, comptime F: type, comptime channel: Channel) type {
                 return self.receiver.env;
             }
             fn apply(self: *Op, args: anytype) void {
-                self.input = args;
-                const result = c.invokeStored(&self.callback, self.input);
+                const result = c.invokeStored(&self.callback, args);
                 const sender = if (comptime @typeInfo(@TypeOf(result)) == .error_union)
                     result catch |err| return self.receiver.setError(err)
                 else
@@ -50,8 +48,8 @@ pub fn Let(comptime S: type, comptime F: type, comptime channel: Channel) type {
                 self.next = sender.connect(self.receiver);
                 self.next.start();
             }
-            pub fn setValue(self: *Op, values: S.Values) void {
-                if (channel == .value) self.apply(values) else self.receiver.setValue(values);
+            pub fn setValue(self: *Op, values: *const S.Values) void {
+                if (channel == .value) self.apply(values.*) else self.receiver.setValue(values);
             }
             pub fn setError(self: *Op, err: anyerror) void {
                 if (channel == .err) self.apply(.{err}) else self.receiver.setError(err);

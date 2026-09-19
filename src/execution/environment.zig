@@ -7,6 +7,15 @@ pub const Env = struct {
     allocator: std.mem.Allocator,
     stop_token: @import("../cancellation/token.zig") = .{},
 
+    /// Internal execution lifetime, propagated unchanged by ordinary nodes.
+    scope: ?*@import("scope.zig").Scope = null,
+
+    pub fn withScope(self: Env, scope: *@import("scope.zig").Scope) Env {
+        var result = self;
+        result.scope = scope;
+        return result;
+    }
+
     pub fn getAllocator(self: Env) std.mem.Allocator {
         return self.allocator;
     }

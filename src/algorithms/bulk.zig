@@ -26,10 +26,10 @@ pub fn Bulk(comptime S: type, comptime F: type) type {
             pub fn getEnv(self: *Op) c.Env {
                 return self.receiver.env;
             }
-            pub fn setValue(self: *Op, values: Values) void {
+            pub fn setValue(self: *Op, values: *const Values) void {
                 for (0..self.count) |i| {
                     if (self.receiver.env.stop_token.stopRequested()) return self.receiver.setStopped();
-                    const result = c.invokeStored(&self.callback, .{i} ++ values);
+                    const result = c.invokeStored(&self.callback, .{i} ++ values.*);
                     if (comptime @typeInfo(@TypeOf(result)) == .error_union) {
                         result catch |err| return self.receiver.setError(err);
                     }

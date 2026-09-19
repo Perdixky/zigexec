@@ -15,14 +15,21 @@ pub fn Scheduled(comptime Scheduler: type) type {
             pub fn start(self: *Op) void {
                 std.debug.assert(!self.started);
                 self.started = true;
-                self.scheduler.submit(&self.task) catch |err| self.receiver.setError(err);
+                const scope = self.receiver.env.scope;
+                c.Scope.acquire(scope);
+                self.scheduler.submit(&self.task) catch |err| {
+                    self.receiver.setError(err);
+                    c.Scope.release(scope);
+                };
             }
             fn execute(task: *Task) void {
                 const self: *Op = @fieldParentPtr("task", task);
+                const scope = self.receiver.env.scope;
+                defer c.Scope.release(scope);
                 if (self.receiver.env.stop_token.stopRequested())
                     self.receiver.setStopped()
                 else
-                    self.receiver.setValue(.{});
+                    self.receiver.setValue(&.{});
             }
         };
         pub fn connect(self: Self, receiver: c.Receiver(Values)) Operation {

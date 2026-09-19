@@ -58,9 +58,9 @@ const task = source.letValue(
 );
 ```
 
-`SendRequest/Decode/AddOffset` 都是带 `pub fn call` 的 struct 类型；args 初始化捕获字段，call 接收上游结果。`then` 处理同步返回值，`letValue(Factory, args)` 调用返回 sender 的工厂，`letValue(body, .{})` 保存当前输入并延迟构造整条子链。复杂组合不需要重复整条链来声明返回类型。
+`SendRequest/Decode/AddOffset` 都是带 `pub fn call` 的 struct 类型；args 初始化捕获字段，call 接收上游结果。`then` 处理同步返回值，`letValue(Factory, args)` 调用返回 sender 的工厂，`letValue(body, .{})` 保留并借用上游输入存储并延迟构造整条子链。复杂组合不需要重复整条链来声明返回类型。
 
-构造和 connect 都不执行业务回调。编译期确定图结构、回调和类型，运行时保存 config/client/offset；所以 `letValue(body, .{})` 的 body 不标记 comptime。`upstream()` 绑定最近一层 letValue 并按值传递结果；动态 buffer 使用显式分配的内存，以 slice 传递。工厂使用指针 self 可以把 operation 内的捕获字段借给异步 I/O。
+构造和 connect 都不执行业务回调。编译期确定图结构、回调和类型，运行时保存 config/client/offset；所以 `letValue(body, .{})` 的 body 不标记 comptime。`upstream()` 绑定最近一层 letValue 并在库内部借用结果存储，业务 callback 参数类型不变；动态 buffer 使用显式分配的内存，以 slice 传递。工厂使用指针 self 可以把 operation 内的捕获字段借给异步 I/O。
 
 反射检查给出包含节点、回调、参数索引和类型的诊断。例如 `just(42).then(Length, .{})` 中 Length 需要字符串时：
 
@@ -231,7 +231,7 @@ tests/                # 单元、内核集成及 compile_fail 诊断测试
 examples/             # CPU、io_uring 文件流水线与 TCP echo
 ```
 
-自定义 sender 提供 `Values`、`Operation`、`connect(Receiver(Values)) Operation`；operation 提供 `start(*Self) void`。`ex.asSender(custom)` 提供链式方法。每个 operation 只启动一次，启动后保持地址稳定，并恰好发送一次完成。receiver 可在完成回调中释放 operation。
+自定义 sender 提供 `Values`、`Operation`、`connect(Receiver(Values)) Operation`；operation 提供 `start(*Self) void`。`ex.asSender(custom)` 提供链式方法。每个 operation 只启动一次，启动后保持地址稳定，并恰好发送一次完成。`setValue` 接收 `*const Values`，发布的结果须来自稳定存储。`ex.connect` 返回 `Connection(S)`；根 receiver 只能在 `setFinished` 中回收 connection。自定义异步 sender 必须在提交前 acquire Env.scope，在收尾后 release。详见 [生命周期协议](docs/lifetimes.md)。
 
 自定义 scheduler 的 `schedule()` 返回空成功 tuple 的 sender。I/O context 的请求协议见 [架构与 stdexec 对应](docs/design.md)。
 
