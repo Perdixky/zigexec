@@ -22,6 +22,9 @@ pub fn RunInScope(comptime S: type) type {
                 callback: ex.StopCallbackFor(R) = .{},
                 output: Empty = .{},
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    ex.cleanupOperations(.{ &self.join_op, &self.child }, continuation);
+                }
                 pub fn start(self: *Op) void {
                     self.callback.init(self.receiver.getEnv().stop_token, self, cancel);
                     self.child.start();

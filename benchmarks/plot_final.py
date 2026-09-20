@@ -20,7 +20,10 @@ def read_json(path):
 
 def save(fig, path):
     for extension in ("svg", "png"):
-        fig.savefig(path.with_suffix("." + extension), dpi=180, bbox_inches="tight")
+        output = path.with_suffix("." + extension)
+        fig.savefig(output, dpi=180, bbox_inches="tight")
+        if extension == "svg":
+            output.write_text("\n".join(line.rstrip() for line in output.read_text().splitlines()) + "\n")
     plt.close(fig)
 
 
@@ -57,7 +60,7 @@ def main():
                ylabel="k validated echoes/s")
         ax.grid(axis="y", alpha=.16)
         ax.set_axisbelow(True)
-    fig.suptitle("Final TCP echo throughput · Linux loopback · one server core", fontsize=16, weight="bold", y=1.02)
+    fig.suptitle("Latest TCP echo throughput · Linux loopback · one server core", fontsize=16, weight="bold", y=1.02)
     fig.text(.5, -.025, "Bars and labels: median. Dots: all five trials. 1 s warmup + 3 s measurement per trial.\n"
              "Ryzen 5 7500F · ReleaseFast / native · 2026-09-20 · independently restarted, interleaved servers", ha="center", color="#465263")
     fig.tight_layout()
@@ -65,7 +68,10 @@ def main():
 
     perf = read_json(args.perf)
     samples = defaultdict(list)
-    for run in perf["directories"]["perf-completion-protocol"]["runs"]:
+    profile = perf.get("profile", perf.get("directories", {}).get("perf-completion-protocol"))
+    if profile is None:
+        raise ValueError("perf archive does not contain a supported profile batch")
+    for run in profile["runs"]:
         for metric in ("cycles:u", "instructions:u"):
             samples[(run["metadata"]["library"], metric)].append(run["counts"][metric]["per_echo"])
     libs = ["baseline", "zigexec", "libxev", "zio"]
@@ -79,14 +85,14 @@ def main():
             ax.scatter([x + (i - 1) * .08 for i in range(3)], values, color="#152a3a", s=16, zorder=3)
             ax.text(x, max(values) + max(medians) * .05, f"{median:.0f}", ha="center", weight="bold")
         ceiling = max(max(samples[(lib, metric)]) for lib in libs)
-        ax.set(xticks=range(4), xticklabels=["Previous\nprotocol", "Final\nzigexec", "libxev", "zio"],
+        ax.set(xticks=range(4), xticklabels=["Published\nbaseline", "Latest\nzigexec", "libxev", "zio"],
                ylim=(0, ceiling * 1.2), ylabel=f"{metric} / validated echo",
-               title=f"Final vs previous protocol: {(medians[1] / medians[0] - 1) * 100:.1f}%")
+               title=f"Latest vs published baseline: {(medians[1] / medians[0] - 1) * 100:.1f}%")
         ax.grid(axis="y", alpha=.16)
         ax.set_axisbelow(True)
     fig.suptitle("User-space CPU cost · 64 B / 256 connections", fontsize=16, weight="bold", y=1.04)
     fig.text(.5, -.08, "Independent perf batch: three trials, 2 s warmup + 10 s measurement. Dots: all trials; bars: median.\n"
-             "Scaled hardware counters; server task only. Previous protocol already uses manually owned operations.", ha="center", color="#465263")
+             "Scaled hardware counters; server task only. Baseline: published commit 71ab83b.", ha="center", color="#465263")
     fig.tight_layout()
     save(fig, args.output_dir / "2026-09-20-final-user-cost")
 

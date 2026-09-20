@@ -19,6 +19,9 @@ pub fn Bulk(comptime S: type, comptime F: type) type {
                 child: c.OperationOf(S, *Op) = undefined,
                 started: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    c.cleanupOperation(&self.child, continuation);
+                }
                 pub fn start(self: *Op) void {
                     std.debug.assert(!self.started);
                     self.started = true;

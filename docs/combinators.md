@@ -109,7 +109,8 @@ The final aggregate is materialized in operation storage. Pointer and slice
 members remain borrowed; copies do not extend pointee lifetimes. `whenAny`
 keeps embedded branch storage and associated resources alive through downstream
 consumption, even after individual branch execution has ended. `repeat`
-extracts association cleanup actions separately at each iteration boundary.
+cleans the concrete child graph at each iteration boundary, letting associated
+children detach their own cleanup actions.
 
 Neither algorithm destroys application resources automatically. A losing
 successful branch may have opened a file or accepted a socket, and `whenAll`

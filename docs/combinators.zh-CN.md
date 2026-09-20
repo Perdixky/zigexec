@@ -95,7 +95,7 @@ const Result = ex.meta.ValueOf(Race);
 
 聚合结果构造在 operation 存储中，指针和 slice 仍是浅拷贝，不延长所指对象生命周期。
 `whenAny` 分支完成后，内嵌 operation 与关联资源仍保持到下游消费结束。
-`repeat` 在每一轮完成时独立提取资源清理动作。
+`repeat` 在每一轮完成时沿具体子 operation 图清理，由关联 child 自行摘除资源清理动作。
 
 算法不自动析构用户资源。失败的 `whenAll` 会丢弃其他分支的成功值，
 `whenAny` 输掉的分支也可能已打开文件或接受 socket。应在分支中安排清理，

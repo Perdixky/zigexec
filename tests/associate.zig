@@ -252,3 +252,88 @@ test "whenAny keeps winning association across asynchronous downstream borrowing
     try t.expect(!early);
     try t.expect(capture.finished and joined.finished);
 }
+
+test "parallel repeats clean associated children while preserving enclosing associations" {
+    const pool = try ex.ThreadPool.init(t.allocator, 4);
+    defer pool.deinit();
+    var scope: ex.SimpleCountingScope = .{};
+    defer scope.deinit();
+    var outer = ex.associate(ex.just(.{}), scope.getToken());
+    defer outer.deinit();
+    var first = ex.associate(ex.just(.{}), scope.getToken());
+    defer first.deinit();
+    var second = ex.associate(ex.just(.{}), scope.getToken());
+    defer second.deinit();
+    const Tick = struct {
+        count: *usize,
+        pub fn call(self: @This()) bool {
+            self.count.* += 1;
+            return self.count.* == 1000;
+        }
+    };
+    var a: usize = 0;
+    var b: usize = 0;
+    const task = outer.takeSender().letValue(ex.whenAll(.{
+        ex.just(.{}).letValue(first.sender(), .{}).continuesOn(pool.getScheduler()).then(Tick, .{&a}).repeatUntil(),
+        ex.just(.{}).letValue(second.sender(), .{}).continuesOn(pool.getScheduler()).then(Tick, .{&b}).repeatUntil(),
+    }), .{});
+    _ = try task.syncWait(.{});
+    first.deinit();
+    second.deinit();
+    _ = try scope.join().syncWait(.{});
+    try t.expectEqual(1000, a);
+    try t.expectEqual(1000, b);
+}
+
+test "repeat cleans all associated fan-in branches before reusing their storage" {
+    var scope: ex.SimpleCountingScope = .{};
+    defer scope.deinit();
+    var first = ex.associate(ex.just(.{}), scope.getToken());
+    defer first.deinit();
+    var second = ex.associate(ex.just(.{}), scope.getToken());
+    defer second.deinit();
+    const Tick = struct {
+        count: *usize,
+        pub fn call(self: @This(), _: anytype) bool {
+            self.count.* += 1;
+            return self.count.* == 100;
+        }
+    };
+    const all = ex.whenAll(.{ first.sender(), second.sender() });
+    const any = ex.whenAny(.{ first.sender(), second.sender() });
+    inline for (.{ all, any }) |joined| {
+        var count: usize = 0;
+        const task = joined.letValue(ex.just(@as(usize, 1)), .{})
+            .then(Tick, .{&count}).repeatUntil();
+        _ = try task.syncWait(.{});
+        try t.expectEqual(100, count);
+    }
+    first.deinit();
+    second.deinit();
+    _ = try scope.join().syncWait(.{});
+}
+
+test "repeat cleanup skips a dependent child when its factory fails" {
+    var scope: ex.SimpleCountingScope = .{};
+    defer scope.deinit();
+    var input = ex.associate(ex.just(.{}), scope.getToken());
+    defer input.deinit();
+    var output = ex.associate(ex.just(false), scope.getToken());
+    defer output.deinit();
+    const Factory = struct {
+        sender: @TypeOf(output.sender()),
+        calls: *usize,
+        pub fn call(self: @This()) error{Finished}!@TypeOf(output.sender()) {
+            self.calls.* += 1;
+            if (self.calls.* == 10) return error.Finished;
+            return self.sender;
+        }
+    };
+    var calls: usize = 0;
+    const task = input.sender().letValue(Factory, .{ output.sender(), &calls }).repeatUntil();
+    try t.expectError(error.Finished, task.syncWait(.{}));
+    input.deinit();
+    output.deinit();
+    _ = try scope.join().syncWait(.{});
+    try t.expectEqual(10, calls);
+}

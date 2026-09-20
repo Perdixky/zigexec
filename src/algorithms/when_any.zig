@@ -54,6 +54,18 @@ pub fn WhenAny(comptime Senders: type) type {
                 result: ex.Completion(Values) = undefined,
                 started: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    var children: ChildPointers() = undefined;
+                    inline for (&self.children, 0..) |*child, i| children[i] = child;
+                    ex.cleanupOperations(children, continuation);
+                }
+                fn ChildPointers() type {
+                    const Children = @FieldType(Op, "children");
+                    const child_types = @typeInfo(Children).@"struct".field_types;
+                    var pointers: [child_types.len]type = undefined;
+                    for (child_types, 0..) |ChildOp, i| pointers[i] = *ChildOp;
+                    return @Tuple(&pointers);
+                }
                 pub fn start(self: *Op) void {
                     std.debug.assert(!self.started);
                     self.started = true;

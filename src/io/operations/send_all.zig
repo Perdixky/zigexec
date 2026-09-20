@@ -21,6 +21,9 @@ pub fn SendAll(comptime Context: type) type {
                 child: ex.meta.OperationOf(Loop, *Op) = undefined,
                 started: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    ex.cleanupOperation(&self.child, continuation);
+                }
                 const Next = struct {
                     operation: *Op,
                     pub fn call(self: @This()) io.Send(Context) {

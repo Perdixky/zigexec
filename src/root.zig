@@ -57,6 +57,8 @@ pub const connect = core.connect;
 pub const connectInto = core.connectInto;
 pub const TypedReceiver = core.TypedReceiver;
 pub const start = core.start;
+pub const cleanupOperation = core.cleanupOperation;
+pub const cleanupOperations = core.cleanupOperations;
 pub fn just(values: anytype) Just(@typeInfo(@import("detail/tuple.zig").ValueTuple(@TypeOf(values))).@"struct".field_types) {
     return asSender(@import("senders/just.zig").just(values));
 }

@@ -78,8 +78,8 @@ algorithms retain arrival counts protecting startup and cancellation dispatch.
 Shared work retains genuine ownership references. `withStopToken` still coordinates
 startup, cancellation, and completion. These synchronization requirements remain.
 
-`repeat` may reconnect its child during completion. Only starting another iteration
-uses the shared TLS trampoline; terminal results forward directly. Copy control
+`repeat` composes each child with the shared TLS trampoline and may reconnect it
+during completion; terminal results forward directly after child cleanup. Copy control
 values before reconnecting, and never read the previous child afterward. Owners
 store state that must survive iterations outside the reconstructed child.
 
@@ -94,8 +94,21 @@ An association can protect resources borrowed by asynchronous downstream work.
 The root detaches records and copies release actions onto the stack before calling
 the final receiver, then releases those independent actions afterward. It never
 reads destroyed operation storage. `whenAny` branches use the enclosing registry;
-repeat extracts iteration records at each storage-reuse boundary. Stack use grows
-with the number of associations at that boundary.
+repeat has no private registry. At each storage-reuse boundary it cleans the
+concrete child graph, and associated children remove their own enclosing-registry
+records before entering the continuation. Removal is synchronized with other
+branches. Stack use grows with the number of associations at that boundary.
+
+Resource-owning custom operations used in repeat can implement
+`pub fn cleanup(self: *@This(), continuation: anytype) void`. Detach owned state
+before calling `continuation.run()` exactly once; that call may reconstruct or
+destroy the operation. Any subsequent release must use independent local data.
+Use `ex.cleanupOperation(&child, continuation)` or
+`ex.cleanupOperations(.{ &next, &child }, continuation)` to forward cleanup through
+initialized children. Uninitialized dependent children must be skipped. Cleanup
+also runs for a connected child canceled before start. This hook handles storage
+reuse, not execution counting; sources still perform their execution cleanup
+before signaling completion. Operations without a hook need no reuse cleanup.
 
 `spawn` frees its allocation in its completion receiver, then releases its independent
 counting-scope association. Wait for that scope's `join()` before reclaiming resources

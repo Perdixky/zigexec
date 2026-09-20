@@ -51,11 +51,13 @@ the optimized implementation's six-scenario comparison, perf counters, and memor
 ![User-space CPU cost at 64-byte messages and 256 connections](benchmarks/results/2026-09-20-final-user-cost.svg)
 
 Bars show medians and dots show every trial. On the tested Ryzen 5 7500F Linux
-loopback setup, zigexec is within -1.9% to +2.0% of libxev throughput across the
-six workloads and leads zio in five of six. The completion-protocol revision
-reduces zigexec user-space cycles per echo by 24.8% and instructions by 33.8%.
-These measurements apply only to the documented single-server-core TCP setup;
-see the final report for methodology, latency, ranges, and limitations.
+loopback setup, the latest zigexec is within -3.3% to +0.0% of libxev throughput
+across the six workloads. Compared with published commit `71ab83b`, its medians
+change by -1.8% to +0.9%, with overlapping five-run ranges in every scenario.
+The cleanup/lifetime revision adds 7.1% user-space cycles per echo and 2.0%
+instructions in the independent perf batch. These measurements apply only to
+the documented single-server-core TCP setup; see the final report for methodology,
+latency, ranges, and limitations.
 
 ## Composable pipelines
 

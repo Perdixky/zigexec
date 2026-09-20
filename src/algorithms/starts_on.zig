@@ -18,6 +18,9 @@ pub fn StartsOn(comptime Scheduler: type, comptime S: type) type {
                 child: c.OperationOf(S, c.TypedReceiver(Values, R)) = undefined,
                 started: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    c.cleanupOperations(.{ &self.child, &self.scheduled }, continuation);
+                }
                 pub fn start(self: *Op) void {
                     std.debug.assert(!self.started);
                     self.started = true;

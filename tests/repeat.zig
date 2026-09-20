@@ -90,7 +90,7 @@ test "repeatUntil supports deferred expression composition" {
     try t.expectEqual(null, try ex.just(.{}).letValue(ex.upstream().repeat(), .{}).withStopToken(stop.token()).syncWait(.{ .allocator = std.testing.allocator }));
 }
 
-test "terminal retirement can destroy the repeating connection" {
+test "terminal completion can destroy the repeating connection" {
     const task = ex.just(true).repeatUntil();
     const Receiver = struct {
         const Op = ex.Connection(@TypeOf(task), *@This());
@@ -139,7 +139,7 @@ test "cancellation reaches an asynchronous effect already waiting for stop" {
     try t.expect((try task.syncWait(.{ .allocator = std.testing.allocator })) == null);
 }
 
-test "asynchronous retirement may destroy a repeating connection" {
+test "asynchronous completion may destroy a repeating connection" {
     const pool = try ex.ThreadPool.init(t.allocator, 2);
     defer pool.deinit();
     const task = ex.just(true).startsOn(pool.getScheduler()).repeatUntil();
@@ -174,7 +174,7 @@ test "asynchronous retirement may destroy a repeating connection" {
     receiver.done.wait();
 }
 
-test "nested repeats share a trampoline and retain parent while queued" {
+test "nested repeats share a trampoline and reconnect safely while queued" {
     const Inner = struct {
         count: *usize,
         pub fn call(self: @This()) bool {
@@ -201,4 +201,101 @@ test "nested repeats share a trampoline and retain parent while queued" {
 test "old repeat names remain aliases of the canonical API" {
     try t.expectEqual(ex.Repeat(ex.Just(.{})), ex.RepeatEffect(ex.Just(.{})));
     try t.expect((try ex.just(true).repeatEffectUntil().syncWait(.{})) != null);
+}
+
+const CleanupProbe = struct {
+    state: *State,
+    pub const Values = ex.Values(.{bool});
+    const State = struct {
+        connected: usize = 0,
+        started: usize = 0,
+        cleaned: usize = 0,
+        terminal: enum { value, err, stopped } = .value,
+        scope: ?*ex.Scope = null,
+    };
+    pub fn Operation(comptime R: type) type {
+        return struct {
+            state: *State,
+            receiver: ex.TypedReceiver(Values, R),
+            output: Values = .{false},
+            pub fn start(self: *@This()) void {
+                std.debug.assert(self.receiver.getEnv().scope == self.state.scope);
+                self.state.started += 1;
+                if (self.state.started == 32) {
+                    switch (self.state.terminal) {
+                        .value => self.output = .{true},
+                        .err => return self.receiver.setError(error.Finished),
+                        .stopped => return self.receiver.setStopped(),
+                    }
+                }
+                self.receiver.setValue(&self.output);
+            }
+            pub fn cleanup(self: *@This(), continuation: anytype) void {
+                self.state.cleaned += 1;
+                self.output = undefined; // repeat must already have copied the condition.
+                continuation.run(); // May reconstruct or free this operation.
+            }
+        };
+    }
+    pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+        std.debug.assert(self.state.connected == self.state.cleaned);
+        self.state.connected += 1;
+        out.* = .{ .state = self.state, .receiver = .init(receiver) };
+    }
+};
+
+test "repeat forwards the environment and cleans each child before reconnect or terminal completion" {
+    const Receiver = struct {
+        state: *CleanupProbe.State,
+        done: bool = false,
+        pub fn getEnv(self: *@This()) ex.Env {
+            return .{ .scope = self.state.scope };
+        }
+        pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
+            std.debug.assert(self.state.terminal == .value);
+            self.finish();
+        }
+        pub fn setError(self: *@This(), err: anyerror) void {
+            std.debug.assert(self.state.terminal == .err and err == error.Finished);
+            self.finish();
+        }
+        pub fn setStopped(self: *@This()) void {
+            std.debug.assert(self.state.terminal == .stopped);
+            self.finish();
+        }
+        fn finish(self: *@This()) void {
+            std.debug.assert(self.state.cleaned == 32);
+            self.done = true;
+        }
+    };
+    var registry: ex.Scope = .{};
+    for ([_]?*ex.Scope{ null, &registry }) |scope| {
+        inline for (.{ .value, .err, .stopped }) |terminal| {
+            var state: CleanupProbe.State = .{ .terminal = terminal, .scope = scope };
+            var receiver: Receiver = .{ .state = &state };
+            const sender = ex.asSender(CleanupProbe{ .state = &state }).repeatUntil()
+                .startsOn(ex.TrampolineScheduler{ .max_depth = 1 });
+            // Raw connection: repeat must work without installing any Scope.
+            var op: ex.meta.OperationOf(@TypeOf(sender), *Receiver) = undefined;
+            sender.connectInto(&op, &receiver);
+            try t.expectEqual(1, state.connected);
+            try t.expectEqual(0, state.started);
+            op.start();
+            try t.expect(receiver.done);
+            try t.expectEqual(32, state.started);
+            try t.expectEqual(state.connected, state.cleaned);
+        }
+    }
+}
+
+test "repeat cleans the connected child when trampoline cancels before its first start" {
+    var stop: ex.StopSource = .{};
+    defer stop.deinit();
+    _ = stop.requestStop();
+    var state: CleanupProbe.State = .{};
+    const sender = ex.asSender(CleanupProbe{ .state = &state }).repeatUntil();
+    try t.expectEqual(null, try sender.syncWait(.{ .stop_token = stop.token() }));
+    try t.expectEqual(1, state.connected);
+    try t.expectEqual(1, state.cleaned);
+    try t.expectEqual(0, state.started);
 }

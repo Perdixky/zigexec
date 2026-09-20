@@ -46,7 +46,9 @@ effect 必须成功完成为 **一个 bool**：false 重复，true 结束并产�
 
 重复执行共用 `TrampolineScheduler` 的线程局部状态，默认允许 16 层、约 4096 字节栈距离内的嵌套执行，超过阈值则加入 intrusive FIFO，由最外层调度调用排空。不同 sender 类型、嵌套 repeat 使用同一队列；不再用每个 repeat 的原子 work 计数防递归。栈距离是调度点之间的阈值，不限制用户 callback 自身的栈用量。
 
-completion 允许立即重建 child，不再有 iteration 或父 scope 的执行计数。生产者通知后不得再访问自身，包括另一线程在 start 返回前完成的情况。仅下一轮进入 trampoline，终态直接转发。每轮的关联资源清理记录仍保留，不含执行原子计数。测试覆盖同步十万轮、嵌套重复、跨线程完成、取消、错误及 completion 内回收整个 receiver/connection。
+实现遵循 stdexec 的 `repeat_until`：每轮子链组合 `startsOn(TrampolineScheduler{})`。首轮在 connect 时构造；完成后清理旧 child、重连整条调度子链，再启动下一轮。scheduler 在每轮 effect 启动前检查取消，包括排队中的轮次；终态在清理后直接转发。
+
+repeat 内部不再持有 iteration `Scope`、资源清理表或执行引用计数，receiver 原样转发环境。清理沿具体子 operation 图执行；`associate` 自行从外层 connection 摘除记录，并通过独立释放动作保护 continuation 期间的资源。普通 child 不访问清理表。生产者通知后不得再访问自身，包括另一线程在 start 返回前完成的情况。自定义资源 operation 可实现 `cleanup(self, continuation)`，详见[生命周期协议](lifetimes.zh-CN.md)。
 
 `ex.TrampolineScheduler{ .max_depth = 16, .max_stack_bytes = 4096 }` 也可独立用于 `schedule`、`startsOn` 和 `continuesOn`。当前线程已有 trampoline 时，采用最外层调度的限制。`repeatEffect`／`repeatEffectUntil` 及对应大写类型名称保留为兼容别名，新代码使用 `repeat`／`repeatUntil`。
 

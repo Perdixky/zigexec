@@ -50,6 +50,16 @@ pub fn Associated(comptime S: type, comptime Token: type) type {
                     child: ex.meta.OperationOf(Wrapped, ex.TypedReceiver(S.Values, R)) = undefined,
                     retirement: ex.Scope.Retirement = .{ .prepare = prepare },
                     started: bool = false,
+                    pub fn cleanup(self: *@This(), continuation: anytype) void {
+                        // Preserve downstream borrows while allowing repeat to
+                        // reconstruct this storage, including during completion.
+                        if (self.association.isEngaged()) {
+                            self.receiver.getEnv().scope.?.remove(&self.retirement);
+                            const action = self.association.takeReleaseAction();
+                            ex.cleanupOperation(&self.child, continuation);
+                            action.run(); // No operation access after continuation.
+                        } else ex.cleanupOperation(&self.child, continuation);
+                    }
                     pub fn start(self: *@This()) void {
                         std.debug.assert(!self.started);
                         self.started = true;

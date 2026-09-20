@@ -22,6 +22,22 @@ pub const Scope = struct {
         self.retirements = record;
         self.retirement_mutex.unlock();
     }
+    /// An operation being reconstructed takes back its own resource record.
+    /// Other branches may still be registering or removing their records.
+    pub fn remove(self: *Scope, record: *Retirement) void {
+        self.retirement_mutex.lock();
+        defer self.retirement_mutex.unlock();
+        var link = &self.retirements;
+        while (link.*) |entry| {
+            if (entry == record) {
+                link.* = entry.next;
+                entry.next = null;
+                return;
+            }
+            link = &entry.next;
+        }
+        unreachable; // Only registered, not yet detached records can be removed.
+    }
     /// All producers have completed, so no registration can still be publishing.
     /// Detach before entering user code; continuation may destroy this scope.
     pub fn complete(self: *Scope, continuation: anytype) void {

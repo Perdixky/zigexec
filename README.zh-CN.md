@@ -292,9 +292,10 @@ operation.start();
 ![64 字节、256 连接时的用户态 CPU 成本](benchmarks/results/2026-09-20-final-user-cost.svg)
 
 柱为中位数，点为每次独立试验。在本次 Ryzen 5 7500F Linux loopback、
-单服务端核测试中，zigexec 六场景吞吐相对 libxev 为 -1.9%～+2.0%，六场景中
-五个高于 zio；最终 completion protocol 相对上一版将每次 echo 的用户态 cycles
-降低 24.8%、instructions 降低 33.8%。这些数字只适用于报告中的 TCP 配置；
+单服务端核测试中，最新 zigexec 六场景吞吐相对 libxev 为 -3.3%～+0.0%。
+相对已发布提交 `71ab83b`，中位数变化为 -1.8%～+0.9%，六个场景的五次样本
+区间均重叠。独立 perf 批次中，cleanup/lifetime 修改使每次 echo 的用户态 cycles
+增加 7.1%、instructions 增加 2.0%。这些数字只适用于报告中的 TCP 配置；
 测试方法、延迟、样本区间和解释边界以最终性能报告为准。
 
 ## 许可证

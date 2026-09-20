@@ -18,6 +18,9 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
                 result: c.CompletionRef(Values) = undefined,
                 started: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    c.cleanupOperations(.{ &self.transfer, &self.child }, continuation);
+                }
                 const TransferReceiver = struct {
                     op: *Op,
                     pub fn getEnv(self: @This()) c.EnvOf(R) {

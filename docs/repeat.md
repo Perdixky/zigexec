@@ -64,11 +64,20 @@ intrusive FIFO drained by that outer call. These limits apply at scheduling
 points, not to stack usage inside a user callback. There is no per-repeat atomic
 work counter.
 
-Completion permits reconstructing the child immediately. There are no iteration
-or parent execution counts. The source must not access itself after completion,
-including when another thread completes before start returns. Only restarting
-uses trampoline; terminal results forward directly. A per-iteration resource
-registry remains for associations, without execution atomics.
+Following stdexec's `repeat_until`, each child is composed with
+`startsOn(TrampolineScheduler{})`. The first child connects eagerly; completion
+cleans up that child, reconnects the scheduled chain, and starts it again.
+The scheduler checks cancellation before starting each effect, including queued
+iterations. Terminal results forward directly after cleanup.
+
+There is no iteration `Scope`, resource registry, or execution reference count
+inside repeat. Its receiver forwards the environment unchanged. Cleanup follows
+the concrete child operation graph; `associate` detaches its own record from the
+enclosing connection and keeps an independent release action across the
+continuation. Ordinary children require no registry access. The source must not
+access itself after completion, including when another thread completes before
+start returns. Custom resource-owning operations can implement
+`cleanup(self, continuation)`; see [operation lifetimes](lifetimes.md).
 
 `ex.TrampolineScheduler{ .max_depth = 16, .max_stack_bytes = 4096 }` also works
 with `schedule`, `startsOn`, and `continuesOn`. Nested scheduler instances use

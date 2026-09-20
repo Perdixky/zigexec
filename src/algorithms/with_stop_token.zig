@@ -22,6 +22,9 @@ pub fn WithStopToken(comptime S: type) type {
                 remaining: std.atomic.Value(usize) = .init(2),
                 started: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    c.cleanupOperation(&self.child, continuation);
+                }
                 pub fn start(self: *Op) void {
                     std.debug.assert(!self.started);
                     self.started = true;

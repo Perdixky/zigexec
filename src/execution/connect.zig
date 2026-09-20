@@ -11,6 +11,9 @@ pub fn Connection(comptime S: type, comptime R: type) type {
         child: protocol.OperationOf(S, *State) = undefined,
         started: bool = false,
         const Self = @This();
+        pub fn cleanup(self: *Self, continuation: anytype) void {
+            @import("cleanup.zig").cleanupOperation(&self.child, continuation);
+        }
         const State = struct {
             receiver: protocol.TypedReceiver(S.Values, R),
             scope: Scope = .{},

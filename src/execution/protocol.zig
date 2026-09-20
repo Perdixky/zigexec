@@ -22,6 +22,8 @@ pub const TypedReceiver = @import("receiver.zig").TypedReceiver;
 pub const OperationOf = @import("receiver.zig").OperationOf;
 pub const connectChild = @import("receiver.zig").connectChild;
 pub const connectInto = @import("connect.zig").connectInto;
+pub const cleanupOperation = @import("cleanup.zig").cleanupOperation;
+pub const cleanupOperations = @import("cleanup.zig").cleanupOperations;
 
 pub const EnvOf = @import("receiver.zig").EnvOf;
 pub const StopCallbackFor = @import("receiver.zig").StopCallbackFor;

@@ -69,20 +69,31 @@ buffer、取消回调已解除、目标/取消 CQE 已收齐后，才能最终�
 引用计数保活。`withStopToken` 保留启动/完成/取消之间真正需要的协调。
 这些计数不能因新的销毁规则而删除。
 
-`repeat` 在完成中允许重连 child；仅下一轮执行经过共享 TLS trampoline，终态
-直接转发。重连前复制所需控制值，重连/通知后不访问旧 child。同步十万轮仍限制
+`repeat` 的每轮子链经过共享 TLS trampoline，在完成中清理并重连 child；终态
+在清理后直接转发。重连前复制所需控制值，重连/通知后不访问旧 child。同步十万轮仍限制
 栈增长；跨轮状态由外部拥有者保存。
 
 ## 关联资源的清理
 
 `Env.scope` 现在仅指向一个资源清理记录表（兼容类型名 `Scope`），没有 active
-计数、父引用、enter/leave、acquire/release 或 idle 通知。只有 `associate` 注册
+计数、父引用、enter/leave、acquire/release 或 idle 通知。只有 `associate` 注册或摘除
 记录时需要锁；普通 I/O、调度与 repeat 不为执行入口计数。
 
 关联可以保护异步下游正在借用的资源，因此不会在关联 child 自身完成时就释放。
 根完成时先摘下所有记录，将 release action 保存到栈，再通知根 receiver，最后
 执行这些独立 action；不会在通知后读取已被销毁的 operation。`whenAny` 分支沿用
-外层清理表，repeat 在每次存储复用边界提取本轮记录。栈空间随该边界的关联数增长。
+外层清理表；repeat 没有独立清理表，而是在存储复用边界沿具体子 operation 图清理，
+由关联 child 自行摘除外层表中的记录。摘除操作与其他分支同步，栈空间随该边界的关联数增长。
+
+在 repeat 内使用的自定义资源 operation 可实现
+`pub fn cleanup(self: *@This(), continuation: anytype) void`。调用
+`continuation.run()` 前必须摘除拥有的状态，且 continuation 恰好执行一次；它可能
+重建或销毁 operation，返回后的释放只能使用独立局部数据。组合节点通过
+`ex.cleanupOperation(&child, continuation)` 或
+`ex.cleanupOperations(.{ &next, &child }, continuation)` 转发到已初始化的 child，
+跳过未连接的依赖 child。已连接但启动前被取消的 child 也会被清理。该 hook 用于
+存储复用，不是执行计数；生产者仍需在发送完成通知前清理执行资源。不需要复用清理
+的 operation 无需实现此 hook。
 
 `spawn` 在自身完成接收函数中释放 allocation，再释放独立的 counting-scope
 association。需要回收被关联资源的调用者仍应等待该 counting scope 的 `join()`；

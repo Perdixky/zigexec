@@ -31,7 +31,14 @@ pub fn Let(comptime S: type, comptime F: type, comptime channel: Channel) type {
                 child: c.OperationOf(S, *Op) = undefined,
                 next: c.OperationOf(Next, c.TypedReceiver(V, R)) = undefined,
                 started: bool = false,
+                next_connected: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    if (self.next_connected)
+                        c.cleanupOperations(.{ &self.next, &self.child }, continuation)
+                    else
+                        c.cleanupOperation(&self.child, continuation);
+                }
                 pub fn start(self: *Op) void {
                     std.debug.assert(!self.started);
                     self.started = true;
@@ -47,6 +54,7 @@ pub fn Let(comptime S: type, comptime F: type, comptime channel: Channel) type {
                     else
                         result;
                     c.connectChild(&self.next, sender, self.receiver);
+                    self.next_connected = true;
                     self.next.start();
                 }
                 pub fn setValue(self: *Op, values: *const S.Values) void {

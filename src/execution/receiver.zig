@@ -134,6 +134,9 @@ fn LegacyOperation(comptime S: type, comptime R: type) type {
     return struct {
         receiver: TypedReceiver(S.Values, R),
         child: S.Operation = undefined,
+        pub fn cleanup(self: *@This(), continuation: anytype) void {
+            @import("cleanup.zig").cleanupOperation(&self.child, continuation);
+        }
         pub fn start(self: *@This()) void {
             self.child.start();
         }

@@ -31,7 +31,14 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
                 child: c.OperationOf(S, *Op) = undefined,
                 next: c.OperationOf(Next, c.TypedReceiver(Values, R)) = undefined,
                 started: bool = false,
+                next_connected: bool = false,
                 const Op = @This();
+                pub fn cleanup(self: *Op, continuation: anytype) void {
+                    if (self.next_connected)
+                        c.cleanupOperations(.{ &self.next, &self.child }, continuation)
+                    else
+                        c.cleanupOperation(&self.child, continuation);
+                }
                 pub fn start(self: *Op) void {
                     std.debug.assert(!self.started);
                     self.started = true;
@@ -45,6 +52,7 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
                         const next = self.body.bindInput(values);
                         c.connectChild(&self.next, next, self.receiver);
                     }
+                    self.next_connected = true;
                     self.next.start();
                     // Input storage remains in child while its owner retains the operation.
                 }
@@ -59,7 +67,10 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
         pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
             out.* = .{ .body = if (comptime isExpression(Body)) self.body else {}, .receiver = .init(receiver) };
             c.connectChild(&out.child, self.sender, out);
-            if (comptime !isExpression(Body)) c.connectChild(&out.next, self.body, out.receiver);
+            if (comptime !isExpression(Body)) {
+                c.connectChild(&out.next, self.body, out.receiver);
+                out.next_connected = true;
+            }
         }
     };
 }
