@@ -8,6 +8,6 @@ pub fn main() void {
         .{},
     ).withStopToken(.{});
     std.debug.print("source operation: {d} bytes; composed operation: {d} bytes\n", .{
-        @sizeOf(@TypeOf(source).Operation), @sizeOf(@TypeOf(task).Operation),
+        @sizeOf(@TypeOf(source).Operation(ex.Receiver(@TypeOf(source).Values))), @sizeOf(@TypeOf(task).Operation(ex.Receiver(@TypeOf(task).Values))),
     });
 }

@@ -1,0 +1,91 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles:u'
+# Event count (approx.): 4820694751
+#
+# Overhead  Source:Line         
+# ........  ....................
+#
+    17.85%  context.zig:218
+    14.41%  scope.zig:51
+    12.71%  sync.zig:34
+     9.29%  sync.zig:27
+     8.11%  repeat_effect.zig:41
+     7.98%  scope.zig:62
+     3.83%  context.zig:180
+     3.39%  atomic.zig:0
+     2.06%  sender.zig:29
+     1.94%  repeat_effect.zig:0
+     1.19%  repeat_effect.zig:60
+     1.10%  atomic.zig:29
+     1.03%  context.zig:94
+     0.91%  sender.zig:44
+     0.79%  scope.zig:68
+     0.64%  atomic.zig:57
+     0.56%  context.zig:217
+     0.51%  scope.zig:49
+     0.48%  scope.zig:50
+     0.46%  scope.zig:59
+     0.46%  ??:0
+     0.44%  source.zig:47
+     0.42%  IoUring.zig:146
+     0.42%  scope.zig:58
+     0.38%  send_all.zig:38
+     0.34%  repeat_effect.zig:40
+     0.34%  submission.zig:0
+     0.29%  context.zig:219
+     0.29%  repeat_effect.zig:72
+     0.29%  atomic.zig:21
+     0.28%  submission.zig:20
+     0.27%  sender.zig:46
+     0.24%  atomic.zig:49
+     0.24%  IoUring.zig:228
+     0.24%  IoUring.zig:143
+     0.23%  context.zig:177
+     0.23%  sender.zig:0
+     0.23%  repeat_effect.zig:38
+     0.22%  let.zig:64
+     0.20%  context.zig:0
+     0.20%  repeat_effect.zig:64
+     0.20%  memcpy.zig:145
+     0.19%  send_all.zig:0
+     0.19%  repeat_effect.zig:35
+     0.18%  submission.zig:21
+     0.17%  callback.zig:42
+     0.17%  context.zig:268
+     0.16%  context.zig:163
+     0.15%  context.zig:84
+     0.14%  context.zig:164
+     0.14%  scope.zig:46
+     0.12%  let.zig:49
+     0.11%  send_all.zig:28
+     0.11%  repeat_effect.zig:79
+     0.11%  memcpy.zig:144
+     0.11%  send_all.zig:65
+     0.11%  context.zig:90
+     0.09%  transform.zig:39
+     0.09%  callback.zig:27
+     0.09%  repeat_effect.zig:43
+     0.09%  context.zig:241
+     0.08%  receiver.zig:134
+     0.08%  context.zig:81
+     0.07%  callback.zig:0
+     0.07%  context.zig:242
+     0.07%  sender.zig:63
+     0.05%  sender.zig:32
+     0.05%  source.zig:45
+     0.05%  repeat_effect.zig:51
+     0.05%  callback.zig:30
+     0.05%  context.zig:259
+     0.05%  scope.zig:65
+     0.05%  receiver.zig:111
+     0.05%  completion.zig:5
+     0.05%  sender.zig:47
+
+
+#
+# (Tip: To show information about system the samples were collected on use perf report --header)
+#

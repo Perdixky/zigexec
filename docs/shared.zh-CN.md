@@ -21,7 +21,7 @@ owner 是一个显式拥有引用的句柄。Zig 普通赋值没有复制构造/
 首次启动还取得单独的上游引用，保证上游操作与通知循环存在期间共享状态不被销毁。这允许：
 
 - 订阅启动后，提前释放所有显式 owner。
-- 一个根 receiver 在 setFinished 时销毁自身 connection。
+- 一个根 receiver 在 completion 时销毁自身 connection。
 - 完成回调中再次订阅相同 shared sender。
 - 完成回调中释放最后一个显式 owner。
 
@@ -33,7 +33,7 @@ owner 是一个显式拥有引用的句柄。Zig 普通赋值没有复制构造/
 
 上游完成后，锁内发布唯一缓存，锁外通知所有订阅；后来启动的订阅直接读取缓存。value、error、stopped 都会缓存。活动订阅通常在上游完成线程收到通知，后来的订阅可以在其启动线程收到缓存；使用 `continuesOn` 显式指定下游位置。
 
-共享上游持有自己的根 Connection，其执行入口退出后才释放上游引用。结果保存到共享缓存，再复制到每个订阅 operation；后续节点借用订阅的结果，不依赖 shared owner 继续存活。指针/slice 仍引用原对象，不会深拷贝，也没有自动调用 `deinit` 的 RAII 行为。外部资源的生命周期仍由调用方管理。与 C++ stdexec 常用的 const-reference 共享完成形式相比，这是明确的 Zig API 取舍。
+共享上游持有自己的根 Connection，通知所有订阅后，作为完成接收函数的最后一步释放上游引用。结果保存到共享缓存，再复制到每个订阅 operation；后续节点借用订阅的结果，不依赖 shared owner 继续存活。指针/slice 仍引用原对象，不会深拷贝，也没有自动调用 `deinit` 的 RAII 行为。外部资源的生命周期仍由调用方管理。与 C++ stdexec 常用的 const-reference 共享完成形式相比，这是明确的 Zig API 取舍。
 
 ## 取消策略
 

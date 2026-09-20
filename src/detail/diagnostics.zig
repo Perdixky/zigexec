@@ -71,11 +71,10 @@ fn definitelyIncompatible(comptime E: type, comptime A: type) bool {
 }
 
 pub fn requireSender(comptime S: type, comptime F: type, comptime stage: []const u8) void {
-    if (@typeInfo(S) == .@"struct") {
-        if (@hasDecl(S, "Values") and @hasDecl(S, "Operation") and @hasDecl(S, "connect")) {
-            if (@TypeOf(S.Values) == type and @TypeOf(S.Operation) == type and @typeInfo(@TypeOf(S.connect)) == .@"fn") {
-                if (@typeInfo(S.Values) == .@"struct" and @typeInfo(S.Values).@"struct".is_tuple and @typeInfo(S.Operation) == .@"struct" and @hasDecl(S.Operation, "start")) return;
-            }
+    if (@typeInfo(S) == .@"struct" and @hasDecl(S, "Values") and @hasDecl(S, "Operation")) {
+        if (@TypeOf(S.Values) == type and @typeInfo(S.Values) == .@"struct" and @typeInfo(S.Values).@"struct".is_tuple) {
+            if (@hasDecl(S, "connectInto") and @typeInfo(@TypeOf(S.Operation)) == .@"fn") return;
+            if (@hasDecl(S, "connect") and @TypeOf(S.Operation) == type and @typeInfo(S.Operation) == .@"struct" and @hasDecl(S.Operation, "start")) return;
         }
     }
     @compileError("zigexec." ++ stage ++ ": " ++ @typeName(F) ++ " must return a sender or !sender (Values, Operation.start, connect); got " ++ @typeName(S));

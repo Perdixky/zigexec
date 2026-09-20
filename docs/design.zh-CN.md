@@ -45,13 +45,22 @@ Sender 提供：
 
 ```zig
 pub const Values = @Tuple(&.{i64});
-pub const Operation = ...;
-pub fn connect(self: Self, receiver: Receiver(Values)) Operation;
+pub fn Operation(comptime R: type) type { ... }
+pub fn connectInto(self: Self, out: anytype, receiver: anytype) void;
 ```
 
 Operation 提供 `start(self: *Operation) void`，只能调用一次。成功、错误、停止恰好选择一个通道；receiver 的方法返回 `void`。用户 receiver 必须通过 `getEnv()` 暴露 Env；Env 的 allocator 和 stop token 均可省略；缺失 allocator 仅在查询时返回 error.MissingAllocator。
 
-Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引用的值；`start` 在最终地址原地连接子操作。启动后不可移动/复制。公开 ex.connect 返回 Connection(S)，通过执行作用域把结果完成与存储回收分开：setValue 接收 *const Values，根 receiver 在 setFinished 才能回收。详见 [生命周期协议](lifetimes.zh-CN.md)。
+`connectInto(&op, sender, receiver)` 在最终地址构造 `ex.Connection(S, R)`，
+并连接已知子 operation；`start` 启动它们。从 connectInto 起禁止移动/复制，
+不依赖 C++ guaranteed copy elision。工厂依赖输入的后续分支在输入到达后连接；
+repeat 可在上一轮 completion 中重连。普通节点保存自身状态和子 operation，不再保留上游
+sender 描述；repeat 为重建保留描述是必要例外。
+
+setValue 接收 *const Values；receiver 可在任意 completion 中回收 operation，
+生产者通知后不再访问它；拥有者仍可保留 child 来借用结果。详见 [生命周期协议](lifetimes.zh-CN.md)。这与 P2300
+在构造阶段连接已知子节点、允许具体 receiver 引用父状态的做法一致，研究见
+[P2300 operation 构造研究](p2300-operation-state.zh-CN.md)。
 
 `connect` 是不可失败的协议。需要资源分配时在显式构造函数返回错误，或在启动后通过 error 通道报告。未启动的普通 operation 不持有需要析构的资源；Shared view 在 `start` 才取得状态引用。
 
@@ -77,7 +86,7 @@ Zig 没有 C++ guaranteed copy elision。本库的 `connect` 返回没有自引�
 
 每个 sender 有一个静态成功 tuple，错误统一为 `anyerror`，stopped 独立。`syncWait` 返回 `anyerror!?Values`。回调 `void/!void` 成功产生空 tuple，`T/!T` 成功产生单元素 tuple。恢复分支必须保持成功 tuple 类型，异形结果可作为 tagged union 值传递。
 
-Receiver 的 Values 保留静态类型，context 与三个函数指针进行小范围类型擦除，避免递归 generic receiver 类型。没有基准保证所有间接调用消失，不宣称与 C++ stdexec 性能相同。
+内建 sender 的 `Operation(R)` 保留 receiver 具体类型；`TypedReceiver(Values, R)` 只存储 R，完成调用静态分派。`Receiver(Values)` 仅作为旧自定义 sender 的显式擦除边界保留。内核请求、取消回调、异构等待队列的通知入口仍使用函数指针，不宣称整套运行时完全没有间接调用。
 
 ## 类型构造器与上下文推导
 
@@ -130,7 +139,7 @@ io_uring 将后端状态嵌入 Request，单独的 submission/completion 模块�
 
 ## 当前边界
 
-`letValue` 保留上游 operation 和工厂状态，借用其输入；整个根 connection 保留到执行入口退出；已有 sender 形式按顺序启动子任务，deferred 形式绑定最近一层输入。所有外部指针/slice/句柄默认借用；scope 不延长工厂栈局部变量或外部资源的生命周期，内部借用不得越过所属 operation 的销毁。资源清理由调用方显式安排。析构不是 Zig 值的隐式行为，组合算法不会自动对丢弃的用户值调用 `deinit`。
+`letValue` 保留上游 operation 和工厂状态，借用其输入；拥有者可在完成后继续保留 child 来延长借用；已有 sender 形式按顺序启动子任务，deferred 形式绑定最近一层输入。所有外部指针/slice/句柄默认借用；scope 不延长工厂栈局部变量或外部资源的生命周期，内部借用不得越过所属 operation 的销毁。资源清理由调用方显式安排。析构不是 Zig 值的隐式行为，组合算法不会自动对丢弃的用户值调用 `deinit`。
 
 尚未提供环境作用域恢复的 `on`、尚未实现的 async-scope 适配器 `spawnFuture`、共享状态自定义值析构策略、协程/GPU 或其他平台后端。下一步可以基于已有取消注册与 I/O 协议实现这些能力，而不必改写核心生命周期模型。
 

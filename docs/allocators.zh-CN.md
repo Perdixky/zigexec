@@ -13,7 +13,7 @@
 
 ## 本库的 Zig API 选择
 
-本库采用固定结构的 Env：**Env.allocator 为可选的 `?std.mem.Allocator = null`，syncWait 仍显式接收 env**。无分配任务可写 `task.syncWait(.{})`；只有执行到需要 allocator 的查询时才要求它存在。缺失时返回 `error.MissingAllocator`，不会隐式使用全局 allocator。
+本库提供动态 Env 与编译期不可取消的 UnstoppableEnv：**Env.allocator 为可选的 `?std.mem.Allocator = null`，syncWait 仍显式接收 env**。无分配任务可写 `task.syncWait(.{})`；只有执行到需要 allocator 的查询时才要求它存在。缺失时返回 `error.MissingAllocator`，不会隐式使用全局 allocator。字面量 env 省略 stop token 时，编译期保留不可取消属性，内置适配器可消除 callback 存储；显式 Env 仍支持动态取消。
 
 ```zig
 const env: ex.Env = .{
@@ -77,7 +77,7 @@ readAllocator 的具体类型为 ex.ReadAllocator，成功输出单个 std.mem.A
 
 ## 分配来源与资源生命周期
 
-Env 借用 allocator，不拥有它，也不是 arena 或资源登记表。分配出的临时资源由相应 operation 释放；转交给最终调用方的拥有型结果由调用方释放。异常和停止路径也必须收尾。根 connection 在 setFinished 才允许回收；临时资源应在所属执行入口退出之前清理，已经发布给下游的结果存储则保持到作用域结束。
+Env 借用 allocator，不拥有它，也不是 arena 或资源登记表。分配出的临时资源由相应 operation 释放；转交给最终调用方的拥有型结果由调用方释放。异常和停止路径也必须收尾。根 connection 可在完成通知中回收；生产者应在通知前清理临时资源，通知后不再访问自身。已发布的结果存储只要被拥有者保留，就可继续供下游借用。
 
 syncWait 不统一释放所有分配，也不创建并自动销毁内部 arena；否则返回的 slice/指针可能立即失效。allocator 的底层状态需要活过任务和所有尚未释放的结果。
 

@@ -4,8 +4,9 @@
 
 `ex.IoUring.init(allocator, .{ .entries = 64 })` creates a context, ring,
 eventfd, and reactor thread. The reactor performs every SQ/CQ operation;
-submitters only access a lock-protected intrusive request queue. Cancellation
-uses an atomic marker and eventfd. The backend requires neither `std.Io` nor
+remote submissions use a lock-protected intrusive inbox detached in batches.
+Reentrant submissions on this reactor append to a local queue without locking or
+writing eventfd. Cancellation uses atomic flags and wakes only for remote calls. The backend requires neither `std.Io` nor
 liburing and uses Zig's low-level `std.os.linux.IoUring` directly.
 
 ## API and kernel requirements
@@ -56,8 +57,8 @@ resources.
 ## Cancellation and CQE tracking
 
 1. On start, the sender registers a stop callback on the environment token.
-2. The callback marks `cancel_requested` and writes eventfd; it never touches
-   the SQ or CQ.
+2. The callback marks `cancel_requested`, then the context's `cancel_dirty`;
+   remote calls write eventfd. It never touches the SQ or CQ.
 3. An unsubmitted request can stop immediately; an in-flight request receives
    an `ASYNC_CANCEL` submission.
 4. Original and cancellation requests use separate `user_data` values, with
@@ -65,15 +66,20 @@ resources.
 5. Once cancellation is submitted, both CQEs must arrive before the receiver is
    notified and the request storage is released.
 
+The active list is scanned only after a cancellation event or shutdown. SQ
+pressure preserves the dirty flag for a retry. Consuming the flag before the
+scan ensures concurrent cancellations trigger this or the next scan. This is
+still an O(active) scan per cancellation batch, not stdexec's individual
+cancellation-task queue.
+
 Waiting for both completions prevents a late cancellation from referencing a
 reused operation address and ensures the kernel no longer borrows the buffer.
 `-ECANCELED` becomes stopped. If the original operation already succeeded,
 success may still win; cancellation is neither preemption nor rollback.
 
 The stop callback is removed before final notification, so cancellation already
-running on another thread is allowed to finish. I/O completion handling retains
-an execution entry, and only its exit permits `setFinished` to retire the root
-connection.
+running on another thread is allowed to finish. The final notification may destroy
+the root connection. No request, receiver, or operation access follows it.
 
 ## Submission pressure and wakeups
 
@@ -81,6 +87,10 @@ SQ capacity limits a submission batch, not the number of outstanding requests.
 When the SQ fills, requests remain queued while the current batch is submitted.
 The implementation neither fabricates `SubmissionQueueFull` nor waits for
 pending reads before submitting later writes or cancellations.
+
+Local scheduler tasks also execute in batches; reentrant jobs wait for the next
+iteration. Remote submission and shutdown share an admission lock, so accepted
+inbox entries cannot be lost during shutdown.
 
 The eventfd poll is always preserved or rebuilt first so cross-thread wakeups
 remain possible under pressure. The reactor continues nonblocking submissions
@@ -119,17 +129,20 @@ Continuations run on the reactor thread by default. Do not block that thread in
 `zig build test-io` runs real-kernel tests for file content and EOF, kernel
 errors, timers, socket pairs, loopback connect/accept, in-flight and shutdown
 cancellation, 128 queued reads on a two-entry ring, address reuse, connection
-retirement from `setFinished`, and shared-timer ownership. Restricted kernels
+retirement from completion, and shared-timer ownership. Restricted kernels
 are not silently skipped.
 
 `sendAll(context, fd, buffer, flags)` composes ordinary sends with
-`repeatEffectUntil` to retry short writes. It returns `buffer.len`, reports
+`repeatUntil` to retry short writes. It returns `buffer.len`, reports
 `WriteZero` when a nonempty write makes no progress, and may already have sent
 partial data before an error or cancellation. It borrows the buffer until
 completion. See the runnable [TCP echo example](../examples/tcp_echo.zig).
 
-The echo server uses one accept loop and dynamically spawns one child per socket.
-All children start with `schedule(context.getScheduler())` and share the context;
-each owns a separate buffer. [CountingScope](counting_scopes.md) tracks associations and joins asynchronously;
-`ex.spawn` owns and reclaims each task. `--once` stops accepting after one spawn and drains
-that child. The echo tests include 32 simultaneous clients plus an idle client.
+The echo server uses one accept loop. Dispatch manually connects and starts
+client operations on the reactor. Each Client owns a buffer and Connection;
+an intrusive list tracks live clients, and completion unlinks, closes the fd,
+and frees storage. This single-reactor example needs no spawn, CountingScope,
+or per-client stop source. The completion protocol permits immediate operation reclamation without
+generic execution counts. `--once` drains its one client. Accept failure shuts down
+the context and drains actual I/O completions. Tests include allocation-failure
+fd cleanup, accept-failure drain, and 32 simultaneous clients plus an idle client.

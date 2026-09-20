@@ -60,14 +60,18 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
     return Sender(@import("algorithms/continues_on.zig").ContinuesOn(S, Scheduler));
 }
 
-pub fn RepeatEffect(comptime S: type) type {
-    return Sender(@import("algorithms/repeat_effect.zig").Repeat(S, false));
+pub fn Repeat(comptime S: type) type {
+    return Sender(@import("algorithms/repeat.zig").Repeat(S, false));
 }
-pub fn RepeatEffectUntil(comptime S: type) type {
-    return Sender(@import("algorithms/repeat_effect.zig").Repeat(S, true));
+pub fn RepeatUntil(comptime S: type) type {
+    return Sender(@import("algorithms/repeat.zig").Repeat(S, true));
 }
 
 /// Input container type preserves tuple indices or named branch tags.
 pub fn WhenAny(comptime Senders: type) type {
     return Sender(@import("algorithms/when_any.zig").WhenAny(Senders));
 }
+
+/// Compatibility aliases; prefer Repeat / RepeatUntil.
+pub const RepeatEffect = Repeat;
+pub const RepeatEffectUntil = RepeatUntil;

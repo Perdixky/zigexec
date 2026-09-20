@@ -50,7 +50,7 @@ Callbacks are struct types; ordinary functions use `ex.Fn(function)`.
 | `LetValue(S,Target)` | Sender plus a factory, sender, or deferred-expression type |
 | `LetError(S,F)`, `LetStopped(S,F)` | Sender and recovery factory type |
 | `Bulk(S,F)` | Sender and callback; count is not part of the type |
-| `RepeatEffect(S)`, `RepeatEffectUntil(S)` | Repeat empty success or until bool is true |
+| `Repeat(S)`, `RepeatUntil(S)` | Repeat empty success or until bool is true |
 | `WhenAll(.{A,B})` | Sender type list; concatenates success arguments |
 | `WhenAny(ContainerType)` | Tuple/named struct of senders; produces one tagged union |
 | `Associated(S,Token)` | Explicit association owner; `.View` is the composable borrowed sender |
@@ -58,7 +58,7 @@ Callbacks are struct types; ordinary functions use `ex.Fn(function)`.
 | `Schedule(Scheduler)` | Scheduler type |
 | `StartsOn(Scheduler,S)`, `ContinuesOn(S,Scheduler)` | Scheduler and sender types |
 | `Shared(S)` | Owner type allocated explicitly by `split` |
-| `Connection(S)` | Root connection returned by public `ex.connect` |
+| `Connection(S, R)` | Root storage initialized in place by `ex.connectInto(&op, sender, receiver)` |
 | `Sender(Implementation)` | Fluent facade for a custom implementation |
 | `Fn(function)` | Stateless callback type for a known function |
 | `Bind(function, .{PrefixTypes...})` | Known function with bound prefix types |
@@ -144,7 +144,7 @@ specialization requires a concrete comptime value rather than merely its type.
 | --- | --- |
 | `meta.ValuesOf(S)` | Complete success tuple |
 | `meta.ValueOf(S)` | Sole success value; errors for zero or multiple values |
-| `meta.OperationOf(S)` | Raw `S.Operation` for internal `sender.connect`; public `ex.connect` returns `Connection(S)` |
+| `meta.OperationOf(S, R)` | Concrete `S.Operation(R)` for internal `sender.connectInto`; root storage is `Connection(S, R)` |
 | `meta.WaitResult(S)` | `anyerror!?S.Values` |
 | `meta.CallResult(Callback, ArgumentTuple)` | Callback result for an argument tuple |
 | `meta.ReturnOf(function, .{ArgumentTypes...})` | Return type after specializing a known function/factory |

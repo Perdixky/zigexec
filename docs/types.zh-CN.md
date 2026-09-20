@@ -44,13 +44,13 @@ const Work = ex.Just(.{i64}).Then(Double).StartsOn(ex.ThreadPool.Scheduler);
 | `LetValue(S,Target)` | 输入 sender 类型；Target 为工厂类型、sender 类型或 deferred 子表达式类型 |
 | `LetError(S,F)`、`LetStopped(S,F)` | 输入 sender 类型、恢复工厂 callback 类型 |
 | `Bulk(S,F)` | 输入 sender 类型、callback 类型；count 不进入类型 |
-| `RepeatEffect(S)`、`RepeatEffectUntil(S)` | 重复执行空成功 effect，或重复到 bool 为 true |
+| `Repeat(S)`、`RepeatUntil(S)` | 重复执行空成功 effect，或重复到 bool 为 true |
 | `WhenAll(.{A,B})` | sender 类型列表 |
 | `WithStopToken(S)` | 输入 sender 类型 |
 | `Schedule(Scheduler)` | scheduler 类型 |
 | `StartsOn(Scheduler,S)`、`ContinuesOn(S,Scheduler)` | scheduler 和 sender 类型 |
 | `Shared(S)` | split 的 owner 类型；运行时由 split 显式分配 |
-| `Connection(S)` | 公开 ex.connect 返回的根连接，包含原始 S.Operation 与执行作用域 |
+| `Connection(S, R)` | 由 `ex.connectInto(&op, sender, receiver)` 原地构造的根连接 |
 | `Sender(Implementation)` | 为自定义实现添加 fluent facade 的类型 |
 | `Fn(function)` | 已知普通/泛型函数的无状态 callback 类型 |
 | `Bind(function, .{PrefixTypes...})` | 已知函数及绑定前置参数的类型列表 |
@@ -114,7 +114,7 @@ const task = ex.just(21).then(@TypeOf(callback), callback);
 | --- | --- |
 | `meta.ValuesOf(S)` | 完整成功 tuple 类型 |
 | `meta.ValueOf(S)` | 唯一成功值类型；零个或多个值时报错 |
-| `meta.OperationOf(S)` | 原始 S.Operation，供内部 sender.connect 使用；公开 ex.connect 返回 Connection(S) |
+| `meta.OperationOf(S, R)` | 具体 `S.Operation(R)`，供内部 sender.connectInto 使用；根存储为 `Connection(S, R)` |
 | `meta.WaitResult(S)` | `anyerror!?S.Values` |
 | `meta.CallResult(Callback, ArgumentTuple)` | callback 在给定参数 tuple 下的结果类型 |
 | `meta.ReturnOf(function, .{ArgumentTypes...})` | 特化已知函数/工厂并查询返回类型 |

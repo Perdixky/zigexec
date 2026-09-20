@@ -1,0 +1,12 @@
+Compiler: 0.17.0-dev.2127+e90365cd5, ReleaseFast, LLVM, x86_64 Linux
+Source: examples/tcp_echo.zig at zigexec 7da66f5acb89794366734bf25188a932030e6363
+Reproduce: python3 benchmarks/layout.py
+Units: bytes; static type sizes, not measured RSS
+
+Echo factory=16400; Echo loop operation=2168
+schedule.letValue(Echo): sender=16448, operation=19072
++ then(Close): sender=16456, operation=35632
++ uponError(CloseError): sender=16464, operation=52200
++ letStopped(CloseStopped): sender=16472, operation=68888
++ scope token wrapper: sender=16480, operation=85656
+Connection=102304; spawn Node layout=102392

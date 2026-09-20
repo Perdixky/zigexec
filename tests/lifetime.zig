@@ -10,18 +10,20 @@ const BigValues = ex.Values(.{Payload});
 const LargeSource = struct {
     origin: *?*const BigValues,
     pub const Values = BigValues;
-    pub const Operation = struct {
-        origin: *?*const BigValues,
-        output: Values = undefined,
-        receiver: ex.Receiver(Values),
-        pub fn start(self: *@This()) void {
-            @memset(&self.output[0], 37);
-            self.origin.* = &self.output;
-            self.receiver.setValue(&self.output);
-        }
-    };
-    pub fn connect(self: @This(), receiver: ex.Receiver(Values)) Operation {
-        return .{ .origin = self.origin, .receiver = receiver };
+    pub fn Operation(comptime R: type) type {
+        return struct {
+            origin: *?*const BigValues,
+            output: Values = undefined,
+            receiver: ex.TypedReceiver(Values, R),
+            pub fn start(self: *@This()) void {
+                @memset(&self.output[0], 37);
+                self.origin.* = &self.output;
+                self.receiver.setValue(&self.output);
+            }
+        };
+    }
+    pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+        out.* = .{ .origin = self.origin, .receiver = .init(receiver) };
     }
 };
 
@@ -40,20 +42,24 @@ test "64 KiB value keeps its address through scopes scheduling and stop forwardi
             return .{ .allocator = t.allocator };
         }
         pub fn setValue(self: *@This(), values: *const BigValues) void {
+            defer self.completeOwnership();
             self.values = values;
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stop");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.finished = true;
         }
     };
     var capture: Capture = .{};
-    var connection = ex.connect(task, &capture);
+    var connection: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&connection, task, &capture);
     connection.start();
     try t.expect(!capture.finished);
     try t.expectEqual(null, capture.values);
@@ -64,7 +70,7 @@ test "64 KiB value keeps its address through scopes scheduling and stop forwardi
     try t.expectEqual(37, capture.values.?.*[0][0]);
     try t.expectEqual(37, capture.values.?.*[0][@sizeOf(Payload) - 1]);
     // Forwarding nodes add only fixed-size metadata, not another 64 KiB tuple.
-    try t.expect(@sizeOf(@TypeOf(task).Operation) < @sizeOf(LargeSource.Operation) + 8192);
+    try t.expect(@sizeOf(@TypeOf(task).Operation(*Capture)) < @sizeOf(LargeSource.Operation(*Capture)) + 8192);
 }
 
 test "then materializes large results in its operation before asynchronous consumption" {
@@ -92,7 +98,8 @@ test "then materializes large results in its operation before asynchronous consu
         }
     };
     var capture: Capture = .{};
-    var connection = ex.connect(task, &capture);
+    var connection: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&connection, task, &capture);
     connection.start();
     loop.finish();
     loop.run();
@@ -102,49 +109,45 @@ test "then materializes large results in its operation before asynchronous consu
     try t.expectEqual(23, capture.values.?.*[0][@sizeOf(Payload) - 1]);
 }
 
-// A real asynchronous producer deliberately continues using its operation after
-// setValue returns. Its execution entry covers that entire interval.
+// Delay completion until the source has finished all accesses to its operation.
 const PausedSource = struct {
     published: *Event,
     proceed: *Event,
     exited: *std.atomic.Value(bool),
     pub const Values = ex.Values(.{i64});
-    pub const Operation = struct {
-        sender: PausedSource,
-        receiver: ex.Receiver(Values),
-        output: Values = .{42},
-        pub fn start(self: *@This()) void {
-            const scope = self.receiver.env.scope;
-            ex.Scope.acquire(scope);
-            const thread = std.Thread.spawn(.{}, run, .{self}) catch |err| {
-                self.receiver.setError(err);
-                ex.Scope.release(scope);
-                return;
-            };
-            thread.detach();
-        }
-        fn run(self: *@This()) void {
-            const scope = self.receiver.env.scope;
-            self.receiver.setValue(&self.output);
-            self.sender.published.set();
-            self.sender.proceed.wait();
-            std.debug.assert(self.output[0] == 42);
-            self.sender.exited.store(true, .release);
-            ex.Scope.release(scope); // Last access; retirement may destroy self.
-        }
-    };
-    pub fn connect(self: PausedSource, receiver: ex.Receiver(Values)) Operation {
-        return .{ .sender = self, .receiver = receiver };
+    pub fn Operation(comptime R: type) type {
+        return struct {
+            sender: PausedSource,
+            receiver: ex.TypedReceiver(Values, R),
+            output: Values = .{42},
+            pub fn start(self: *@This()) void {
+                const thread = std.Thread.spawn(.{}, run, .{self}) catch |err| {
+                    self.receiver.setError(err);
+                    return;
+                };
+                thread.detach();
+            }
+            fn run(self: *@This()) void {
+                self.sender.published.set();
+                self.sender.proceed.wait();
+                std.debug.assert(self.output[0] == 42);
+                self.sender.exited.store(true, .release);
+                self.receiver.setValue(&self.output);
+            }
+        };
+    }
+    pub fn connectInto(self: PausedSource, out: anytype, receiver: anytype) void {
+        out.* = .{ .sender = self, .receiver = .init(receiver) };
     }
 };
 
-test "root retirement waits until producer has finished post-completion accesses" {
+test "root completion may destroy the producer after its last operation access" {
     var published: Event = .{};
     var proceed: Event = .{};
     var exited: std.atomic.Value(bool) = .init(false);
     const sender: PausedSource = .{ .published = &published, .proceed = &proceed, .exited = &exited };
-    const Connection = ex.Connection(PausedSource);
     const Capture = struct {
+        const Connection = ex.Connection(PausedSource, *@This());
         connection: *Connection,
         exited: *std.atomic.Value(bool),
         value: i64 = 0,
@@ -154,24 +157,28 @@ test "root retirement waits until producer has finished post-completion accesses
             return .{ .allocator = t.allocator };
         }
         pub fn setValue(self: *@This(), values: *const PausedSource.Values) void {
+            defer self.completeOwnership();
             self.value = values.*[0];
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stop");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             std.debug.assert(self.exited.load(.acquire));
             t.allocator.destroy(self.connection);
             self.retired.store(true, .release);
             self.done.set();
         }
     };
+    const Connection = Capture.Connection;
     const connection = try t.allocator.create(Connection);
     var capture: Capture = .{ .connection = connection, .exited = &exited };
-    connection.* = ex.connect(sender, &capture);
+    ex.connectInto(connection, sender, &capture);
     connection.start();
     published.wait();
     const premature = capture.retired.load(.acquire);
@@ -181,7 +188,7 @@ test "root retirement waits until producer has finished post-completion accesses
     try t.expectEqual(42, capture.value);
 }
 
-test "syncWait returns only after producer scope exits" {
+test "syncWait waits for producer completion" {
     var published: Event = .{};
     var proceed: Event = .{};
     var exited: std.atomic.Value(bool) = .init(false);
@@ -207,44 +214,40 @@ test "syncWait returns only after producer scope exits" {
     try t.expectEqual(42, waiter.result);
 }
 
-test "repeat does not overwrite the previous iteration during its completion handler" {
+test "repeat can reconnect during asynchronous completion" {
     const Effect = struct {
         round: *std.atomic.Value(usize),
         pub const Values = ex.Values(.{bool});
-        pub const Operation = struct {
-            round: *std.atomic.Value(usize),
-            receiver: ex.Receiver(Values),
-            generation: usize = 0,
-            output: Values = undefined,
-            pub fn start(self: *@This()) void {
-                self.generation = self.round.fetchAdd(1, .monotonic) + 1;
-                const scope = self.receiver.env.scope;
-                ex.Scope.acquire(scope);
-                const thread = std.Thread.spawn(.{}, run, .{self}) catch |err| {
-                    self.receiver.setError(err);
-                    ex.Scope.release(scope);
-                    return;
-                };
-                thread.detach();
-            }
-            fn run(self: *@This()) void {
-                const scope = self.receiver.env.scope;
-                const generation = self.generation;
-                self.output = .{generation == 100};
-                self.receiver.setValue(&self.output);
-                // Reconstruction would reset/replace these fields if the old
-                // repeat algorithm restarted from within setValue.
-                std.debug.assert(self.generation == generation);
-                std.debug.assert(self.round.load(.monotonic) == generation);
-                ex.Scope.release(scope);
-            }
-        };
-        pub fn connect(self: @This(), receiver: ex.Receiver(Values)) Operation {
-            return .{ .round = self.round, .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                round: *std.atomic.Value(usize),
+                receiver: ex.TypedReceiver(Values, R),
+                generation: usize = 0,
+                output: Values = undefined,
+                pub fn start(self: *@This()) void {
+                    self.generation = self.round.fetchAdd(1, .monotonic) + 1;
+                    const thread = std.Thread.spawn(.{}, run, .{self}) catch |err| {
+                        self.receiver.setError(err);
+                        return;
+                    };
+                    thread.detach();
+                }
+                fn run(self: *@This()) void {
+                    const generation = self.generation;
+                    self.output = .{generation == 100};
+                    // All source accesses precede its terminal completion.
+                    std.debug.assert(self.generation == generation);
+                    std.debug.assert(self.round.load(.monotonic) == generation);
+                    self.receiver.setValue(&self.output);
+                }
+            };
+        }
+        pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .round = self.round, .receiver = .init(receiver) };
         }
     };
     var round: std.atomic.Value(usize) = .init(0);
-    _ = try ex.asSender(Effect{ .round = &round }).repeatEffectUntil().syncWait(.{ .allocator = t.allocator });
+    _ = try ex.asSender(Effect{ .round = &round }).repeatUntil().syncWait(.{ .allocator = t.allocator });
     try t.expectEqual(100, round.load(.monotonic));
 }
 
@@ -269,7 +272,8 @@ test "shared results remain owned by each subscription across scheduling and own
         }
     };
     var capture: Capture = .{};
-    var connection = ex.connect(task, &capture);
+    var connection: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&connection, task, &capture);
     connection.start();
     shared.deinit();
     // The shared cache is gone before the subscriber consumes its own result.

@@ -1,0 +1,148 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles:k'
+# Event count (approx.): 74703418348
+#
+# Overhead  Symbol                                    IPC   [IPC Coverage]
+# ........  ........................................  ....................
+#
+     4.13%  [k] tcp_ack                               -      -            
+     2.55%  [k] __tcp_transmit_skb                    -      -            
+     2.26%  [k] tcp_sendmsg_locked                    -      -            
+     2.23%  [k] __memcg_slab_post_alloc_hook          -      -            
+     2.04%  [k] __mod_timer                           -      -            
+     1.83%  [k] tcp_rcv_established                   -      -            
+     1.76%  [k] skb_defer_free_flush                  -      -            
+     1.67%  [k] __dev_queue_xmit                      -      -            
+     1.63%  [k] tcp_v4_rcv                            -      -            
+     1.60%  [k] _raw_spin_lock_irqsave                -      -            
+     1.58%  [k] __ip_queue_xmit                       -      -            
+     1.55%  [k] skb_release_data                      -      -            
+     1.51%  [k] __memcg_slab_free_hook                -      -            
+     1.43%  [k] io_send                               -      -            
+     1.42%  [k] kfree                                 -      -            
+     1.41%  [k] ep_poll_callback                      -      -            
+     1.39%  [k] handle_softirqs                       -      -            
+     1.36%  [k] tcp_recvmsg_locked                    -      -            
+     1.35%  [k] ip_send_check                         -      -            
+     1.35%  [k] __rcu_read_unlock                     -      -            
+     1.35%  [k] net_rx_action                         -      -            
+     1.30%  [k] io_submit_sqes                        -      -            
+     1.20%  [k] process_backlog                       -      -            
+     1.19%  [k] tcp_write_xmit                        -      -            
+     1.18%  [k] __io_submit_flush_completions         -      -            
+     1.16%  [k] fget                                  -      -            
+     1.16%  [k] ip_finish_output2                     -      -            
+     1.10%  [k] __mod_memcg_state                     -      -            
+     1.06%  [k] ktime_get                             -      -            
+     1.04%  [k] __alloc_skb                           -      -            
+     1.03%  [k] io_issue_sqe                          -      -            
+     0.99%  [k] enqueue_to_backlog                    -      -            
+     0.99%  [k] __check_object_size                   -      -            
+     0.98%  [k] tcp_schedule_loss_probe               -      -            
+     0.91%  [k] tcp_current_mss                       -      -            
+     0.88%  [k] kmem_cache_alloc_node_noprof          -      -            
+     0.86%  [k] __inet_lookup_established             -      -            
+     0.83%  [k] loopback_xmit                         -      -            
+     0.81%  [k] native_sched_clock                    -      -            
+     0.78%  [k] tcp_event_new_data_sent               -      -            
+     0.76%  [k] tcp_inbound_hash                      -      -            
+     0.76%  [k] __kmalloc_noprof                      -      -            
+     0.73%  [k] __copy_skb_header                     -      -            
+     0.72%  [k] skb_page_frag_refill                  -      -            
+     0.71%  [k] _copy_to_iter                         -      -            
+     0.69%  [k] sock_sendmsg                          -      -            
+     0.68%  [k] __io_issue_sqe                        -      -            
+     0.67%  [k] __wake_up_common                      -      -            
+     0.67%  [k] release_sock                          -      -            
+     0.67%  [k] hook_socket_sendmsg                   -      -            
+     0.64%  [k] validate_xmit_skb                     -      -            
+     0.60%  [k] tcp_stream_alloc_skb                  -      -            
+     0.57%  [k] __skb_datagram_iter                   -      -            
+     0.53%  [k] __local_bh_enable_ip                  -      -            
+     0.53%  [k] io_recv                               -      -            
+     0.52%  [k] inet_sendmsg                          -      -            
+     0.51%  [k] tcp_wfree                             -      -            
+     0.51%  [k] security_socket_recvmsg               -      -            
+     0.51%  [k] memset                                -      -            
+     0.51%  [k] _copy_from_iter                       -      -            
+     0.50%  [k] _find_next_bit                        -      -            
+     0.49%  [k] raw_local_deliver                     -      -            
+     0.49%  [k] irqtime_account_irq                   -      -            
+     0.49%  [k] __account_obj_stock                   -      -            
+     0.48%  [k] tcp_rcv_space_adjust                  -      -            
+     0.48%  [k] inet_recvmsg                          -      -            
+     0.48%  [k] ip_rcv_finish_core                    -      -            
+     0.45%  [k] sk_filter_trim_cap                    -      -            
+     0.45%  [k] __rcu_read_lock                       -      -            
+     0.44%  [k] sk_forced_mem_schedule                -      -            
+     0.43%  [k] fput                                  -      -            
+     0.43%  [k] tcp_queue_rcv                         -      -            
+     0.43%  [k] tcp_ack_update_rtt                    -      -            
+     0.41%  [k] tcp_sendmsg                           -      -            
+     0.40%  [k] napi_consume_skb                      -      -            
+     0.40%  [k] __virt_addr_valid                     -      -            
+     0.39%  [k] _raw_spin_lock_irq                    -      -            
+     0.37%  [k] sock_def_readable                     -      -            
+     0.37%  [k] srso_alias_return_thunk               -      -            
+     0.37%  [k] ipv4_dst_check                        -      -            
+     0.36%  [k] __css_rstat_updated                   -      -            
+     0.36%  [k] __tcp_select_window                   -      -            
+     0.36%  [k] dst_release                           -      -            
+     0.35%  [k] skb_clone_tx_timestamp                -      -            
+     0.35%  [k] io_sendmsg_prep                       -      -            
+     0.35%  [k] __kfree_skb                           -      -            
+     0.33%  [k] __netif_receive_skb_one_core          -      -            
+     0.32%  [k] __io_cqring_overflow_flush            -      -            
+     0.32%  [k] tcp_event_data_recv                   -      -            
+     0.31%  [k] dev_hard_start_xmit                   -      -            
+     0.31%  [k] tcp_tso_segs                          -      -            
+     0.31%  [k] tcp_newly_delivered                   -      -            
+     0.29%  [k] try_charge_memcg                      -      -            
+     0.29%  [k] _raw_spin_unlock_irqrestore           -      -            
+     0.29%  [k] eth_type_trans                        -      -            
+     0.29%  [k] lock_timer_base                       -      -            
+     0.28%  [k] ip_output                             -      -            
+     0.28%  [k] io_recvmsg_prep                       -      -            
+     0.27%  [k] sk_reset_timer                        -      -            
+     0.27%  [k] _raw_spin_lock_bh                     -      -            
+     0.27%  [k] ip_rcv                                -      -            
+     0.27%  [k] kmem_cache_free                       -      -            
+     0.25%  [k] __netif_receive_skb_core.constprop.0  -      -            
+     0.25%  [k] __wake_up_sync_key                    -      -            
+     0.25%  [k] skb_clone                             -      -            
+     0.24%  [k] ip_local_deliver_finish               -      -            
+     0.24%  [k] __tcp_cleanup_rbuf                    -      -            
+     0.24%  [k] kfree_skbmem                          -      -            
+     0.24%  [k] ip_finish_output                      -      -            
+     0.24%  [k] tcp_options_write                     -      -            
+     0.23%  [k] __io_submit_flush_completions.cold    -      -            
+     0.23%  [k] __ip_local_out                        -      -            
+     0.23%  [k] cubictcp_cwnd_event_tx_start          -      -            
+     0.23%  [k] io_alloc_ocqe                         -      -            
+     0.23%  [k] lock_sock_nested                      -      -            
+     0.23%  [k] ipv4_mtu                              -      -            
+     0.21%  [k] ip_protocol_deliver_rcu               -      -            
+     0.21%  [k] io_netmsg_recycle                     -      -            
+     0.21%  [k] __ip_finish_output                    -      -            
+     0.21%  [k] cubictcp_cong_avoid                   -      -            
+     0.21%  [k] tcp_v4_fill_cb                        -      -            
+     0.21%  [k] cubictcp_acked                        -      -            
+     0.21%  [k] skb_attempt_defer_free                -      -            
+     0.21%  [k] do_softirq.part.0                     -      -            
+     0.21%  [k] bpf_skops_write_hdr_opt.isra.0        -      -            
+     0.21%  [k] sock_rfree                            -      -            
+     0.21%  [k] refill_stock                          -      -            
+     0.20%  [k] tcp_rate_check_app_limited            -      -            
+     0.20%  [k] calc_wheel_index                      -      -            
+     0.20%  [k] kmalloc_reserve                       -      -            
+     0.20%  [k] tcp_update_pacing_rate                -      -            
+     0.20%  [k] tcp_rearm_rto                         -      -            
+
+
+#
+# (Tip: To change sampling frequency to 100 Hz: perf record -F 100)
+#

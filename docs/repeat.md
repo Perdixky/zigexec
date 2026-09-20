@@ -2,15 +2,15 @@
 
 **English** | [简体中文](repeat.zh-CN.md)
 
-## repeatEffect
+## repeat
 
 ```zig
-const task = effect.repeatEffect();
+const task = effect.repeat();
 ```
 
 The effect must complete successfully with an **empty tuple**. After every
 success the algorithm reconnects and starts the same sender description.
-Error and stopped terminate the repetition unchanged. `repeatEffect` itself
+Error and stopped terminate the repetition unchanged. `repeat` itself
 never succeeds, so it is normally paired with cancellation or a sentinel error
 that is recovered according to application semantics.
 
@@ -19,7 +19,7 @@ const Tick = struct {
     count: *usize,
     pub fn call(self: @This()) void { self.count.* += 1; }
 };
-const task = ex.just(.{}).then(Tick, .{&count}).repeatEffect();
+const task = ex.just(.{}).then(Tick, .{&count}).repeat();
 _ = try task.syncWait(.{ .allocator = allocator, .stop_token = source.token() });
 ```
 
@@ -27,7 +27,7 @@ This synchronous loop needs another thread to request stop. The token is checked
 before each round; an asynchronous child already running still finishes through
 its own cancellation protocol and is never simply discarded.
 
-## repeatEffectUntil
+## repeatUntil
 
 ```zig
 const Tick = struct {
@@ -38,7 +38,7 @@ const Tick = struct {
         return self.count.* == self.limit;
     }
 };
-const task = ex.just(.{}).then(Tick, .{ &count, 100 }).repeatEffectUntil();
+const task = ex.just(.{}).then(Tick, .{ &count, 100 }).repeatUntil();
 _ = try task.syncWait(.{ .allocator = allocator });
 ```
 
@@ -48,7 +48,7 @@ cancelled. Error or stopped terminates immediately, and type mismatches receive
 a dedicated compile-time diagnostic.
 
 Both algorithms have free functions, fluent sender methods, deferred-expression
-methods, and `RepeatEffect(S)` / `RepeatEffectUntil(S)` type constructors.
+methods, and `Repeat(S)` / `RepeatUntil(S)` type constructors.
 
 ## State, scheduling, and lifetime
 
@@ -57,10 +57,24 @@ description, reinitializing callback captures stored by value. State that must
 survive rounds belongs behind an explicit pointer or stable external owner.
 Allocator and stop token are forwarded from the final receiver.
 
-Synchronous completion is driven by a loop rather than recursive `start`
-calls. Asynchronous completion transfers ownership of the drive loop through an
-atomic counter. Only one child exists at a time, and its storage is reused only
-after the round's completion handling exits and its child scope becomes idle.
+Repetition shares the thread-local `TrampolineScheduler` across sender types and
+nested repeats. Nested submissions execute inline up to the outermost scheduler's
+limits (16 levels and 4096 bytes of stack distance by default), then enter an
+intrusive FIFO drained by that outer call. These limits apply at scheduling
+points, not to stack usage inside a user callback. There is no per-repeat atomic
+work counter.
+
+Completion permits reconstructing the child immediately. There are no iteration
+or parent execution counts. The source must not access itself after completion,
+including when another thread completes before start returns. Only restarting
+uses trampoline; terminal results forward directly. A per-iteration resource
+registry remains for associations, without execution atomics.
+
+`ex.TrampolineScheduler{ .max_depth = 16, .max_stack_bytes = 4096 }` also works
+with `schedule`, `startsOn`, and `continuesOn`. Nested scheduler instances use
+the outermost instance's limits. `repeatEffect` / `repeatEffectUntil` and their
+capitalized type constructors remain compatibility aliases; new code should use
+`repeat` / `repeatUntil`.
 
 Repetition does not change threads or insert a scheduling point. A purely
 synchronous infinite effect monopolizes the current thread; include a scheduler
@@ -72,25 +86,27 @@ execution while waiting for I/O.
 The [echo example](../examples/tcp_echo.zig) uses this per-connection loop:
 
 ```zig
-const body = ex.upstream()
-    .letValue(Receive, .{&connection})
-    .letValue(EchoChunk, .{&connection})
+const body = Io.recv(self.context, self.socket, &self.buffer, 0)
+    .letValue(EchoChunk, .{self})
     .then(DiscardCount, .{})
-    .repeatEffect();
+    .repeat()
+    .uponError(PeerError, .{});
 ```
 
-`EchoChunk` reports `EndOfStream` at EOF. The surrounding
-`FinishConnection` frees the buffer, closes the descriptor, and recovers EOF
-or client I/O errors to empty success. `OutOfMemory` still propagates and stops
-the server, while the stopped path cleans up and remains stopped. The next
-`recv` starts only after the previous `sendAll` completes.
+`EchoChunk` reports `EndOfStream` at EOF; `PeerError` recovers EOF and client
+I/O errors to empty success. Client's root completion unlinks the node, closes
+the fd, and frees its buffer and operation. The next recv starts only after the
+previous sendAll completes.
 
-An outer `repeatEffectUntil` drives `accept`: after one connection finishes it
-accepts another, while `--once` returns true after the first. The service is
-one execution graph and `main` calls `syncWait` only once.
+An outer `repeatUntil` drives accept. Dispatch directly connects and starts each
+new Client operation, then accepting continues without waiting for that client.
+All client bookkeeping runs on the reactor. `--once` stops after the first
+accept but waits for that Client to retire. Allocation failure closes the new
+fd; accept failure shuts down the context and drains existing clients. This
+example uses neither spawn nor CountingScope.
 
 `io.sendAll(context, fd, buffer, flags)` internally retries short writes with
-`repeatEffectUntil`. An empty buffer returns zero; a zero-byte send for a
+`repeatUntil`. An empty buffer returns zero; a zero-byte send for a
 nonempty buffer reports `WriteZero`. Cancellation and errors can occur after a
 partial write, so sending is not transactional. The buffer is borrowed until
 completion and no additional memory is allocated.

@@ -46,8 +46,8 @@ callback stays one value; its fields are not recursively expanded.
 
 All branches start. An error or stopped completion requests sibling cancellation;
 the aggregate waits for every branch's completion. Errors take precedence over
-stopped, reporting the first observed error. As with other ordinary chains,
-root `setFinished` additionally waits for producer execution to retire.
+stopped, reporting the first observed error. All branch completion and cancellation
+coordination finishes before forwarding. The receiver may destroy the graph then.
 
 `ex.WhenAll(.{ A, B })` names the sender type. `ex.meta.ValuesOf(SenderType)`
 (or `SenderType.Values`) describes the complete success argument tuple.
@@ -83,7 +83,7 @@ there is no fairness guarantee, and inline branches start in declaration order.
 All branches are started, including branches whose stop token is already set.
 
 After selecting a winner, the algorithm requests stop on the other branches
-and waits for **every branch's execution to retire** before invoking downstream.
+and waits for **every branch to complete** before invoking downstream.
 A recv-versus-timer race therefore drains the cancelled kernel request before
 downstream code can reuse its buffer. A noncooperative loser can delay completion
 indefinitely: this is structured cancellation, not detached work or a hard timeout.
@@ -108,8 +108,8 @@ ordinary value; a `letValue` factory still returns a sender or `!sender`.
 The final aggregate is materialized in operation storage. Pointer and slice
 members remain borrowed; copies do not extend pointee lifetimes. `whenAny`
 keeps embedded branch storage and associated resources alive through downstream
-consumption, even after individual branch execution has ended. `repeatEffect`
-uses a separate retirement boundary for each iteration.
+consumption, even after individual branch execution has ended. `repeat`
+extracts association cleanup actions separately at each iteration boundary.
 
 Neither algorithm destroys application resources automatically. A losing
 successful branch may have opened a file or accepted a socket, and `whenAll`

@@ -57,21 +57,23 @@ test "whenAny external cancellation drains all pending branches" {
     try t.expect((try ex.whenAny(.{ support.AwaitStop{}, support.AwaitStop{} }).syncWait(.{ .stop_token = stop.token() })) == null);
 }
 
-test "whenAny waits for loser post-completion accesses before downstream runs" {
+test "whenAny observes loser cleanup performed before completion" {
     const Late = struct {
         exited: *bool,
         pub const Values = Empty;
-        pub const Operation = struct {
-            exited: *bool,
-            receiver: ex.Receiver(Empty),
-            output: Empty = .{},
-            pub fn start(self: *@This()) void {
-                self.receiver.setValue(&self.output);
-                self.exited.* = true;
-            }
-        };
-        pub fn connect(self: @This(), receiver: ex.Receiver(Empty)) Operation {
-            return .{ .exited = self.exited, .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                exited: *bool,
+                receiver: ex.TypedReceiver(Empty, R),
+                output: Empty = .{},
+                pub fn start(self: *@This()) void {
+                    self.exited.* = true;
+                    self.receiver.setValue(&self.output);
+                }
+            };
+        }
+        pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .exited = self.exited, .receiver = .init(receiver) };
         }
     };
     const Check = struct {
@@ -103,37 +105,34 @@ test "whenAny races parallel completions without changing winning payload" {
     }
 }
 
-test "whenAny waits for asynchronous post-completion work and permits root destruction" {
+test "whenAny waits for all source completions and permits root destruction" {
     const Source = struct {
         const Self = @This();
         published: *support.Event,
         proceed: *support.Event,
         pub const Values = ex.Values(.{i64});
-        pub const Operation = struct {
-            source: Self,
-            receiver: ex.Receiver(Values),
-            output: Values = .{42},
-            pub fn start(self: *@This()) void {
-                const scope = self.receiver.env.scope;
-                ex.Scope.acquire(scope);
-                const thread = std.Thread.spawn(.{}, run, .{self}) catch |err| {
-                    self.receiver.setError(err);
-                    ex.Scope.release(scope);
-                    return;
-                };
-                thread.detach();
-            }
-            fn run(self: *@This()) void {
-                const scope = self.receiver.env.scope;
-                self.receiver.setValue(&self.output);
-                self.source.published.set();
-                self.source.proceed.wait();
-                std.debug.assert(self.output[0] == 42);
-                ex.Scope.release(scope);
-            }
-        };
-        pub fn connect(self: @This(), receiver: ex.Receiver(Values)) Operation {
-            return .{ .source = self, .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                source: Self,
+                receiver: ex.TypedReceiver(Values, R),
+                output: Values = .{42},
+                pub fn start(self: *@This()) void {
+                    const thread = std.Thread.spawn(.{}, run, .{self}) catch |err| {
+                        self.receiver.setError(err);
+                        return;
+                    };
+                    thread.detach();
+                }
+                fn run(self: *@This()) void {
+                    self.source.published.set();
+                    self.source.proceed.wait();
+                    std.debug.assert(self.output[0] == 42);
+                    self.receiver.setValue(&self.output);
+                }
+            };
+        }
+        pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .source = self, .receiver = .init(receiver) };
         }
     };
     var published: support.Event = .{};
@@ -142,8 +141,8 @@ test "whenAny waits for asynchronous post-completion work and permits root destr
         .source = Source{ .published = &published, .proceed = &proceed },
         .pending = support.AwaitStop{},
     });
-    const Op = ex.Connection(@TypeOf(task));
     const Capture = struct {
+        const Op = ex.Connection(@TypeOf(task), *@This());
         op: *Op,
         called: std.atomic.Value(bool) = .init(false),
         done: support.Event = .{},
@@ -151,23 +150,27 @@ test "whenAny waits for asynchronous post-completion work and permits root destr
             return .{};
         }
         pub fn setValue(self: *@This(), value: *const @TypeOf(task).Values) void {
+            defer self.completeOwnership();
             std.debug.assert(value[0].source[0] == 42);
             self.called.store(true, .release);
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stop");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             t.allocator.destroy(self.op);
             self.done.set();
         }
     };
+    const Op = Capture.Op;
     const op = try t.allocator.create(Op);
     var capture: Capture = .{ .op = op };
-    op.* = ex.connect(task, &capture);
+    ex.connectInto(op, task, &capture);
     op.start();
     published.wait();
     const early = capture.called.load(.acquire);

@@ -2,7 +2,7 @@
 
 [English](io_uring.md) | **简体中文**
 
-`ex.IoUring.init(allocator, .{ .entries = 64 })` 创建 context、ring、eventfd 与一个 reactor 线程。所有 SQ/CQ 操作由 reactor 执行，提交者只访问受锁保护的 intrusive 请求队列；取消使用原子标记和 eventfd。无需 `std.Io` 或 liburing，直接使用 Zig 的低层 `std.os.linux.IoUring`。
+`ex.IoUring.init(allocator, .{ .entries = 64 })` 创建 context、ring、eventfd 与一个 reactor 线程。所有 SQ/CQ 操作由 reactor 执行，跨线程提交通过受锁保护的 intrusive inbox，由 reactor 批量摘取；本 reactor 的重入提交直接进入本地队列，不加队列锁、不写 eventfd。取消使用原子标记，跨线程取消通过 eventfd 唤醒。无需 `std.Io` 或 liburing，直接使用 Zig 的低层 `std.os.linux.IoUring`。
 
 ## API 与内核需求
 
@@ -32,18 +32,22 @@ operation 嵌入后端 Request，提交与取消不额外分配请求节点。�
 ## 取消与 CQE 追踪
 
 1. sender 启动时注册环境 token 的 stop callback。
-2. callback 标记 `cancel_requested` 并写 eventfd，不接触 SQ/CQ。
+2. callback 先标记 `cancel_requested`，再设置 context 的 `cancel_dirty`；只有跨线程取消写 eventfd，不接触 SQ/CQ。
 3. 未提交的请求可直接停止；在途请求提交 `ASYNC_CANCEL`。
 4. 原请求和取消请求分别携带 user_data，最低位标识取消 CQE。
 5. 已提交取消时，两个 CQE 全部收齐后才通知 receiver 并释放 Request。
 
+没有取消事件时不遍历 active 链表。有取消事件或 shutdown 时扫描一次；SQ 满则保留 dirty 标志，下一轮继续。扫描前消费标志，因此与扫描并发的新取消会触发下一轮，不会丢失。当前仍是事件触发的 O(active) 扫描，并非 stdexec 的逐请求取消任务队列。
+
 最后一步保证迟到的取消不会引用已被复用的 operation 地址，也保证内核不再借用 buffer。`-ECANCELED` 进入 stopped；若原操作已经成功，仍可发送成功，取消不是抢占或事务回滚。
 
-在最终通知前解除 stop callback，因此其他线程上已经开始的取消调用也会收尾。I/O 完成处理持有执行入口，退出后才允许根 receiver 在 setFinished 回收 connection。
+在最终通知前解除 stop callback，因此其他线程上已经开始的取消调用也会收尾。根 receiver 可以在最终完成通知中回收 connection；通知后不再访问 request、receiver 或 operation。
 
 ## 提交压力与唤醒
 
 SQ 大小限制一次提交的批次，不限制在途请求数。SQ 满时保留用户请求并先提交现有批次，不伪造 `SubmissionQueueFull` 完成，也不等待挂起读取结束才提交后面的写入/取消。
+
+本地普通调度任务也按批次执行；重入排队的任务留到下一轮，避免立即递归或阻塞等待丢失本地工作。跨线程 submit 与 shutdown 共用 admission 锁，关闭前已接受的 inbox 会被处理。
 
 eventfd 的 poll 始终优先保留/重建，避免 ring 满时失去跨线程唤醒能力。请求队列或待提交取消不为空时，继续非阻塞提交批次；没有这些工作时才等待 CQE。
 
@@ -61,15 +65,17 @@ continuation 默认运行在 reactor 线程。不要在该线程阻塞调用 `sy
 
 ## 测试
 
-`zig build test-io` 独立运行真实内核测试，包括文件内容/EOF、内核错误、定时器、socketpair、loopback connect/accept、在途取消、关闭取消、2 条目 ring 下 128 个读取排队、100 轮地址复用、setFinished 内释放 connection，以及共享 timer 的所有权。测试不会静默跳过受限内核。
+`zig build test-io` 独立运行真实内核测试，包括文件内容/EOF、内核错误、定时器、socketpair、loopback connect/accept、在途取消、关闭取消、2 条目 ring 下 128 个读取排队、100 轮地址复用、completion 内释放 connection，以及共享 timer 的所有权。测试不会静默跳过受限内核。
 
 ## 完整发送与 echo
 
-`sendAll(context, fd, buffer, flags)` 是基于普通 send 的组合操作，使用 repeatEffectUntil 重试短写；成功返回 buffer.len，非空写入无进展时报 WriteZero。错误/取消发生前可能已经发送部分数据。该操作借用 buffer 到完成。TCP 客户端异常关闭时可使用 linux.MSG.NOSIGNAL。
+`sendAll(context, fd, buffer, flags)` 是基于普通 send 的组合操作，使用 repeatUntil 重试短写；成功返回 buffer.len，非空写入无进展时报 WriteZero。错误/取消发生前可能已经发送部分数据。该操作借用 buffer 到完成。TCP 客户端异常关闭时可使用 linux.MSG.NOSIGNAL。
 
-可运行的 [TCP echo 示例](../examples/tcp_echo.zig) 使用 repeatEffect 驱动连接内循环，启动命令为 `zig build run-echo -- 9000`，回环测试为 `zig build test-echo`。
+可运行的 [TCP echo 示例](../examples/tcp_echo.zig) 使用 repeat 驱动连接内循环，启动命令为 `zig build run-echo -- 9000`，回环测试为 `zig build test-echo`。
 
-服务只有一个 accept 循环，每次接入 spawn 独立 echo 子链；各子链以
-`schedule(context.getScheduler())` 开始，共用同一个 context，各自持有 buffer。
-[CountingScope](counting_scopes.zh-CN.md) 负责关联计数与异步 join，`ex.spawn` 负责子任务回收；`--once` 接入一个连接后
-等待其子链结束。回环测试包括 32 个并发客户端以及一个保持空闲的连接。
+服务只有一个 accept 循环，Dispatch 在 reactor 回调里手工连接并启动每条 Client
+operation。每个 Client 拥有独立 buffer 和 Connection，普通 intrusive 链表记录存活节点，
+completion 摘链并关闭 fd、释放内存。此单线程示例不用 spawn、CountingScope 或
+每连接 stop source；完成通知允许回收 operation，不再维护通用执行计数。
+`--once` 接入一条后等待它退出。accept 失败通过 context shutdown 取消在途 I/O，
+收齐真实完成后退出。测试包含分配失败 fd 清理、accept 失败排空，以及 32 并发加空闲连接。

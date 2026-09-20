@@ -8,14 +8,18 @@ const Capture = struct {
     pub fn getEnv(_: *@This()) ex.Env {
         return .{ .start_scheduler = ex.StartScheduler.init(&inline_scheduler) };
     }
-    pub fn setValue(_: *@This(), _: *const Empty) void {}
-    pub fn setError(_: *@This(), _: anyerror) void {
+    pub fn setValue(self: *@This(), _: *const Empty) void {
+        defer self.completeOwnership();
+    }
+    pub fn setError(self: *@This(), _: anyerror) void {
+        defer self.completeOwnership();
         @panic("unexpected error");
     }
-    pub fn setStopped(_: *@This()) void {
+    pub fn setStopped(self: *@This()) void {
+        defer self.completeOwnership();
         @panic("unexpected stop");
     }
-    pub fn setFinished(self: *@This()) void {
+    fn completeOwnership(self: *@This()) void {
         self.finished = true;
     }
 };
@@ -41,7 +45,8 @@ test "associate is eager association lazy execution and allocation free" {
     try t.expectEqual(42, (try owner.sender().syncWait(.{})).?[0]);
     try t.expectEqual(2, count);
     var capture: Capture = .{};
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     try t.expect(!capture.finished); // Sender owner still holds an association.
     owner.deinit();
@@ -72,11 +77,13 @@ test "associated operation retains input resources across downstream scheduling"
     defer owner.deinit();
     var loop: ex.RunLoop = .{};
     var work_capture: Capture = .{};
-    var work = ex.connect(owner.takeSender().continuesOn(loop.getScheduler()), &work_capture);
+    var work: ex.Connection(@TypeOf(owner.takeSender().continuesOn(loop.getScheduler())), @TypeOf(&work_capture)) = undefined;
+    ex.connectInto(&work, owner.takeSender().continuesOn(loop.getScheduler()), &work_capture);
     work.start();
     try t.expect(!owner.isEngaged());
     var joined: Capture = .{};
-    var join = ex.connect(scope.join(), &joined);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&joined)) = undefined;
+    ex.connectInto(&join, scope.join(), &joined);
     join.start();
     try t.expect(!joined.finished);
     loop.finish();
@@ -90,25 +97,30 @@ test "association releases only after root receiver destroys operation allocatio
     var owner = ex.associate(ex.just(.{}), scope.getToken());
     defer owner.deinit();
     const S = @TypeOf(owner.takeSender());
-    const Connection = ex.Connection(S);
     const Root = struct {
+        const Connection = ex.Connection(S, *@This());
         op: *Connection,
         freed: *bool,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{};
         }
-        pub fn setValue(_: *@This(), _: *const Empty) void {}
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setValue(self: *@This(), _: *const Empty) void {
+            defer self.completeOwnership();
+        }
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("stop");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             t.allocator.destroy(self.op);
             self.freed.* = true;
         }
     };
+    const Connection = Root.Connection;
     const Check = struct {
         freed: *bool,
         pub fn call(self: @This()) void {
@@ -117,11 +129,12 @@ test "association releases only after root receiver destroys operation allocatio
     };
     var freed = false;
     var capture: Capture = .{};
-    var join = ex.connect(scope.join().then(Check, .{&freed}), &capture);
+    var join: ex.Connection(@TypeOf(scope.join().then(Check, .{&freed})), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join().then(Check, .{&freed}), &capture);
     join.start();
     const op = try t.allocator.create(Connection);
     var root: Root = .{ .op = op, .freed = &freed };
-    op.* = ex.connect(owner.takeSender(), &root);
+    ex.connectInto(op, owner.takeSender(), &root);
     op.start();
     try t.expect(freed and capture.finished);
 }
@@ -150,7 +163,7 @@ test "associated sender cancellation errors and repeat iteration retirement" {
     defer simple.deinit();
     var reusable = ex.associate(ex.just(.{}).then(Until, .{&rounds}), simple.getToken());
     defer reusable.deinit();
-    _ = try reusable.sender().repeatEffectUntil().syncWait(.{});
+    _ = try reusable.sender().repeatUntil().syncWait(.{});
     reusable.deinit();
     _ = try simple.join().syncWait(.{});
     _ = try scope.join().syncWait(.{});
@@ -167,28 +180,32 @@ test "multiple associated branches retire safely when root storage is freed" {
     var second = ex.associate(ex.just(.{20}), b.getToken());
     defer second.deinit();
     const task = ex.whenAll(.{ first.takeSender(), second.takeSender() });
-    const Op = ex.Connection(@TypeOf(task));
     const Root = struct {
+        const Op = ex.Connection(@TypeOf(task), *@This());
         op: *Op,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{};
         }
-        pub fn setValue(_: *@This(), values: *const @TypeOf(task).Values) void {
+        pub fn setValue(self: *@This(), values: *const @TypeOf(task).Values) void {
+            defer self.completeOwnership();
             std.debug.assert(values[0] == 10 and values[1] == 20);
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("stop");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             t.allocator.destroy(self.op);
         }
     };
+    const Op = Root.Op;
     const op = try t.allocator.create(Op);
     var root: Root = .{ .op = op };
-    op.* = ex.connect(task, &root);
+    ex.connectInto(op, task, &root);
     op.start();
     _ = try a.join().syncWait(.{});
     _ = try b.join().syncWait(.{});
@@ -204,7 +221,8 @@ test "unused association views do not acquire and take empties the owner" {
     _ = moved.sender();
     _ = moved.takeSender();
     var capture: Capture = .{};
-    _ = ex.connect(moved.sender(), &capture); // Never started, no operation lease.
+    var unstarted: ex.Connection(@TypeOf(moved.sender()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&unstarted, moved.sender(), &capture); // Never started, no operation lease.
     moved.deinit();
     _ = try scope.join().syncWait(.{});
 }
@@ -221,10 +239,12 @@ test "whenAny keeps winning association across asynchronous downstream borrowing
     const task = ex.whenAny(.{ .winner = owner.takeSender() })
         .continuesOn(loop.getScheduler()).then(Discard, .{});
     var capture: Capture = .{};
-    var op = ex.connect(task, &capture);
+    var op: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&op, task, &capture);
     op.start();
     var joined: Capture = .{};
-    var join = ex.connect(scope.join(), &joined);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&joined)) = undefined;
+    ex.connectInto(&join, scope.join(), &joined);
     join.start();
     const early = joined.finished;
     loop.finish();

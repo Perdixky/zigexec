@@ -1,0 +1,18 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles'
+# Event count (approx.): 75506074976
+#
+# Overhead  Shared Object    
+# ........  .................
+#
+    94.84%  [kernel.kallsyms]
+     5.16%  zio-echo         
+
+
+#
+# (Tip: To filter subset of samples with report or script add --time X-Y or --cpu A,B,C or --socket-filter ...)
+#

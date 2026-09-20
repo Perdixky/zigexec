@@ -1,59 +1,58 @@
 const std = @import("std");
-const Receiver = @import("receiver.zig").Receiver;
-const Env = @import("environment.zig").Env;
+const protocol = @import("receiver.zig");
 const Scope = @import("scope.zig").Scope;
+const CompletionRef = @import("completion_ref.zig").CompletionRef;
 
-/// Root execution owner. Keep its address stable from start until setFinished.
-/// setValue/error/stopped publish completion; setFinished authorizes reclamation.
-pub fn Connection(comptime S: type) type {
+/// Eagerly connect at the final address. Completion may destroy the connection;
+/// owners may also retain it to keep borrowed result storage alive.
+pub fn Connection(comptime S: type, comptime R: type) type {
     return struct {
-        sender: S,
-        receiver: Receiver(S.Values),
-        child: S.Operation = undefined,
-        scope: Scope = .{ .on_idle = finished },
+        state: State,
+        child: protocol.OperationOf(S, *State) = undefined,
         started: bool = false,
-        completed: bool = false,
         const Self = @This();
+        const State = struct {
+            receiver: protocol.TypedReceiver(S.Values, R),
+            scope: Scope = .{},
+            completed: bool = false,
+            pub fn getEnv(self: *@This()) protocol.EnvOf(R) {
+                return self.receiver.getEnv().withScope(&self.scope);
+            }
+            fn complete(self: *@This(), result: CompletionRef(S.Values)) void {
+                std.debug.assert(!self.completed);
+                self.completed = true;
+                const Forward = struct {
+                    receiver: protocol.TypedReceiver(S.Values, R),
+                    result: CompletionRef(S.Values),
+                    pub fn run(action: @This()) void {
+                        action.receiver.completeRef(action.result);
+                    }
+                };
+                self.scope.complete(Forward{ .receiver = self.receiver, .result = result });
+            }
+            pub fn setValue(self: *@This(), values: *const S.Values) void {
+                self.complete(.{ .value = values });
+            }
+            pub fn setError(self: *@This(), err: anyerror) void {
+                self.complete(.{ .err = err });
+            }
+            pub fn setStopped(self: *@This()) void {
+                self.complete(.stopped);
+            }
+        };
         pub fn start(self: *Self) void {
             std.debug.assert(!self.started);
             self.started = true;
-            self.scope.context = self;
-            // A public connection starts an independent root. Internal nodes
-            // forward its scope; a borrowed Env is not ownership of another root.
-            self.scope.enter();
-            self.child = self.sender.connect(Receiver(S.Values).init(self));
-            self.child.start();
-            self.scope.leave();
-        }
-        pub fn getEnv(self: *Self) Env {
-            return self.receiver.env.withScope(&self.scope);
-        }
-        pub fn setValue(self: *Self, values: *const S.Values) void {
-            std.debug.assert(!self.completed);
-            self.completed = true;
-            self.receiver.setValue(values);
-        }
-        pub fn setError(self: *Self, err: anyerror) void {
-            std.debug.assert(!self.completed);
-            self.completed = true;
-            self.receiver.setError(err);
-        }
-        pub fn setStopped(self: *Self) void {
-            std.debug.assert(!self.completed);
-            self.completed = true;
-            self.receiver.setStopped();
-        }
-        fn finished(ctx: *anyopaque) void {
-            const self: *Self = @ptrCast(@alignCast(ctx));
-            std.debug.assert(self.completed); // An async sender must acquire a scope entry.
-            self.receiver.setFinished();
+            self.child.start(); // Tail: even synchronous completion may destroy self.
         }
     };
 }
-
-pub fn connect(sender: anytype, receiver: anytype) Connection(@TypeOf(sender)) {
-    return .{ .sender = sender, .receiver = Receiver(@TypeOf(sender).Values).init(receiver) };
+pub fn connectInto(out: anytype, sender: anytype, receiver: anytype) void {
+    const checked: *Connection(@TypeOf(sender), @TypeOf(receiver)) = out;
+    checked.* = .{ .state = .{ .receiver = .init(receiver) } };
+    protocol.connectChild(&out.child, sender, &out.state);
 }
+pub const connect = connectInto;
 pub fn start(operation: anytype) void {
     operation.start();
 }

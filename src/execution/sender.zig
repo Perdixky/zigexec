@@ -9,7 +9,9 @@ pub fn Sender(comptime Impl: type) type {
         inner: Impl,
         pub const Values = Impl.Values;
         pub const can_error = @import("../detail/completion_traits.zig").canError(Impl);
-        pub const Operation = Impl.Operation;
+        pub fn Operation(comptime R: type) type {
+            return @import("receiver.zig").OperationOf(Impl, R);
+        }
         const Self = @This();
 
         // Type-level counterparts mirror fluent runtime composition.
@@ -34,11 +36,11 @@ pub fn Sender(comptime Impl: type) type {
         pub fn Bulk(comptime Callback: type) type {
             return ex.Bulk(Self, Callback);
         }
-        pub fn RepeatEffect() type {
-            return ex.RepeatEffect(Self);
+        pub fn Repeat() type {
+            return ex.Repeat(Self);
         }
-        pub fn RepeatEffectUntil() type {
-            return ex.RepeatEffectUntil(Self);
+        pub fn RepeatUntil() type {
+            return ex.RepeatUntil(Self);
         }
         pub fn StartsOn(comptime Scheduler: type) type {
             return ex.StartsOn(Scheduler, Self);
@@ -50,8 +52,8 @@ pub fn Sender(comptime Impl: type) type {
             return ex.WithStopToken(Self);
         }
 
-        pub fn connect(self: Self, receiver: ex.Receiver(Values)) Operation {
-            return self.inner.connect(receiver);
+        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
+            @import("receiver.zig").connectChild(out, self.inner, receiver);
         }
         pub fn then(self: Self, comptime Callback: type, args: anytype) ex.Then(Self, Callback) {
             return ex.then(self, Callback, args);
@@ -74,11 +76,16 @@ pub fn Sender(comptime Impl: type) type {
         pub fn bulk(self: Self, count: usize, comptime Callback: type, args: anytype) ex.Bulk(Self, Callback) {
             return ex.bulk(self, count, Callback, args);
         }
-        pub fn repeatEffect(self: Self) ex.RepeatEffect(Self) {
-            return ex.repeatEffect(self);
+        /// Compatibility aliases; prefer repeat / repeatUntil.
+        pub const repeatEffect = repeat;
+        pub const repeatEffectUntil = repeatUntil;
+        pub const RepeatEffect = Repeat;
+        pub const RepeatEffectUntil = RepeatUntil;
+        pub fn repeat(self: Self) ex.Repeat(Self) {
+            return ex.repeat(self);
         }
-        pub fn repeatEffectUntil(self: Self) ex.RepeatEffectUntil(Self) {
-            return ex.repeatEffectUntil(self);
+        pub fn repeatUntil(self: Self) ex.RepeatUntil(Self) {
+            return ex.repeatUntil(self);
         }
         pub fn startsOn(self: Self, scheduler: anytype) ex.StartsOn(@TypeOf(scheduler), Self) {
             return ex.startsOn(scheduler, self);
@@ -95,7 +102,7 @@ pub fn Sender(comptime Impl: type) type {
         pub fn associate(self: Self, token: anytype) ex.Associated(Self, @TypeOf(token)) {
             return ex.associate(self, token);
         }
-        pub fn syncWait(self: Self, env: ex.Env) anyerror!?Values {
+        pub fn syncWait(self: Self, env: anytype) anyerror!?Values {
             return ex.syncWait(self, env);
         }
     };

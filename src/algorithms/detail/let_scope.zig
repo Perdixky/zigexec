@@ -9,7 +9,7 @@ fn isExpression(comptime Body: type) bool {
 }
 fn NextSender(comptime Body: type, comptime Input: type) type {
     if (isExpression(Body)) return Body.Bound(Input);
-    if (@typeInfo(Body) == .@"struct" and @hasDecl(Body, "Values") and @hasDecl(Body, "Operation") and @hasDecl(Body, "connect")) {
+    if (@typeInfo(Body) == .@"struct" and @hasDecl(Body, "Values") and @hasDecl(Body, "Operation") and (@hasDecl(Body, "connectInto") or @hasDecl(Body, "connect"))) {
         @import("../../detail/diagnostics.zig").requireSender(Body, Body, "letValue");
         return Body;
     }
@@ -24,38 +24,42 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
         pub const Values = Next.Values;
         pub const can_error = traits.canError(S) or traits.canError(Next);
         const Self = @This();
-        pub const Operation = struct {
-            sender: S,
-            body: Body,
-            receiver: c.Receiver(Values),
-            child: S.Operation = undefined,
-            next: Next.Operation = undefined,
-            started: bool = false,
-            const Op = @This();
-            pub fn start(self: *Op) void {
-                std.debug.assert(!self.started);
-                self.started = true;
-                self.child = self.sender.connect(c.Receiver(S.Values).init(self));
-                self.child.start();
-            }
-            pub fn getEnv(self: *Op) c.Env {
-                return self.receiver.env;
-            }
-            pub fn setValue(self: *Op, values: *const S.Values) void {
-                const next = if (comptime isExpression(Body)) self.body.bindInput(values) else self.body;
-                self.next = next.connect(self.receiver);
-                self.next.start();
-                // Input storage remains in child until the enclosing scope retires.
-            }
-            pub fn setError(self: *Op, err: anyerror) void {
-                self.receiver.setError(err);
-            }
-            pub fn setStopped(self: *Op) void {
-                self.receiver.setStopped();
-            }
-        };
-        pub fn connect(self: Self, receiver: c.Receiver(Values)) Operation {
-            return .{ .sender = self.sender, .body = self.body, .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                body: if (isExpression(Body)) Body else void,
+                receiver: c.TypedReceiver(Values, R),
+                child: c.OperationOf(S, *Op) = undefined,
+                next: c.OperationOf(Next, c.TypedReceiver(Values, R)) = undefined,
+                started: bool = false,
+                const Op = @This();
+                pub fn start(self: *Op) void {
+                    std.debug.assert(!self.started);
+                    self.started = true;
+                    self.child.start();
+                }
+                pub fn getEnv(self: *Op) c.EnvOf(R) {
+                    return self.receiver.getEnv();
+                }
+                pub fn setValue(self: *Op, values: *const S.Values) void {
+                    if (comptime isExpression(Body)) {
+                        const next = self.body.bindInput(values);
+                        c.connectChild(&self.next, next, self.receiver);
+                    }
+                    self.next.start();
+                    // Input storage remains in child while its owner retains the operation.
+                }
+                pub fn setError(self: *Op, err: anyerror) void {
+                    self.receiver.setError(err);
+                }
+                pub fn setStopped(self: *Op) void {
+                    self.receiver.setStopped();
+                }
+            };
+        }
+        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
+            out.* = .{ .body = if (comptime isExpression(Body)) self.body else {}, .receiver = .init(receiver) };
+            c.connectChild(&out.child, self.sender, out);
+            if (comptime !isExpression(Body)) c.connectChild(&out.next, self.body, out.receiver);
         }
     };
 }

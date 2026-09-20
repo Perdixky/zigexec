@@ -43,10 +43,12 @@ empty `.{ }` arguments. Compile-time reflection selects the form without
 runtime dispatch or type erasure. Factory instances, sender types, invalid
 targets, and extra captures for value targets receive explicit diagnostics.
 
-An existing sender's construction expression is evaluated immediately; only
-`connect` and `start` are delayed. Use a factory when construction itself
-must occur after upstream success. All continuation forms are skipped on
-upstream error or stopped and forward that completion unchanged. A child
+An existing sender's construction expression is evaluated immediately, and its
+operation is connected when the enclosing operation is connected. Its start
+remains conditional on upstream success. A deferred expression connects after
+its input is available. Use a factory when sender construction itself must occur
+after upstream success. All continuation forms skip execution on upstream error
+or stopped and forward that completion unchanged. A child
 sender's own value, error, or stopped completion continues downstream.
 
 A deferred `body` is **not comptime** because it may contain runtime
@@ -120,8 +122,9 @@ and [repetition](repeat.md) all compose inside deferred expressions.
 Construction stores state but runs no application logic. After `start`, an
 upstream operation stores its success tuple and the child scope borrows that
 address instead of saving another input copy. Operations must remain at stable
-addresses. The root connection retains storage until completion handlers leave
-their execution entries, then `setFinished` permits retirement. See the
+addresses. Completion permits destroying the root; an owner may instead retain
+its children to keep borrowed result storage valid. Producers do not access
+operation storage after completion. See the
 [lifetime protocol](lifetimes.md).
 
 `upstream()` forwards tuple storage by reference inside the framework while

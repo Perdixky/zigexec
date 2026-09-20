@@ -44,8 +44,8 @@ pub fn build(b: *std.Build) void {
         .{ "sender_invalid_args", "zigexec.letValue: sender/subchain operands require .{} as args; captures belong to factory callbacks" },
         .{ "factory_instance", "zigexec.letValue: pass the factory type as the first argument and its captures as the second" },
         .{ "sender_type", "zigexec.letValue: pass a constructed sender/subchain value; only a factory callback is passed as a type" },
-        .{ "repeat_values", "zigexec.repeatEffect: expected an empty completion tuple; use then to discard values" },
-        .{ "repeat_condition", "zigexec.repeatEffectUntil: expected one bool completion value; true finishes, false repeats" },
+        .{ "repeat_values", "zigexec.repeat: expected an empty completion tuple; use then to discard values" },
+        .{ "repeat_condition", "zigexec.repeatUntil: expected one bool completion value; true finishes, false repeats" },
         .{ "receiver_env", "zigexec.receiver: provide getEnv() returning an Env" },
         .{ "receiver_value", "zigexec.receiver: setValue must accept *const Values; copy values.* only when retaining an owned result" },
     };
@@ -110,5 +110,16 @@ pub fn build(b: *std.Build) void {
     b.step("run-echo", "Run the io_uring TCP echo server ([port] [--once])").dependOn(&run_echo.step);
     const echo_test = b.addSystemCommand(&.{ "python3", "tests/tcp_echo.py" });
     echo_test.addArtifactArg(echo_example);
-    b.step("test-echo", "Test the TCP echo example on loopback (requires Python 3)").dependOn(&echo_test.step);
+    const echo_unit = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/tcp_echo.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zigexec", .module = mod }},
+        }),
+    });
+    const run_echo_unit = b.addRunArtifact(echo_unit);
+    const test_echo = b.step("test-echo", "Test the TCP echo example on loopback (requires Python 3)");
+    test_echo.dependOn(&echo_test.step);
+    test_echo.dependOn(&run_echo_unit.step);
 }

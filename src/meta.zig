@@ -22,8 +22,8 @@ pub fn ValueOf(comptime S: type) type {
     return fields[0];
 }
 
-pub fn OperationOf(comptime S: type) type {
-    return S.Operation;
+pub fn OperationOf(comptime S: type, comptime R: type) type {
+    return @import("execution/receiver.zig").OperationOf(S, R);
 }
 
 pub fn WaitResult(comptime S: type) type {

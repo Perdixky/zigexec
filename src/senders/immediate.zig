@@ -9,18 +9,20 @@ pub fn ImmediateKind(comptime V: type, comptime channel: ?enum { value, err, sto
         pub const Values = V;
         pub const can_error = channel == null or channel == .err;
         const Self = @This();
-        pub const Operation = struct {
-            receiver: c.Receiver(V),
-            result: c.Completion(V),
-            started: bool = false,
-            pub fn start(self: *@This()) void {
-                std.debug.assert(!self.started);
-                self.started = true;
-                self.receiver.complete(&self.result);
-            }
-        };
-        pub fn connect(self: Self, receiver: c.Receiver(V)) Operation {
-            return .{ .receiver = receiver, .result = self.result };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                receiver: c.TypedReceiver(V, R),
+                result: c.Completion(V),
+                started: bool = false,
+                pub fn start(self: *@This()) void {
+                    std.debug.assert(!self.started);
+                    self.started = true;
+                    self.receiver.complete(&self.result);
+                }
+            };
+        }
+        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
+            out.* = .{ .receiver = .init(receiver), .result = self.result };
         }
     };
 }

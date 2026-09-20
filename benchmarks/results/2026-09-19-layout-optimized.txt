@@ -1,0 +1,7 @@
+Echo factory=16400; Echo loop operation=936
+schedule.letValue(Echo): sender=16448, operation=17600
++ then(Close): sender=16456, operation=17616
++ uponError(CloseError): sender=16464, operation=17632
++ letStopped(CloseStopped): sender=16472, operation=17664
++ scope token wrapper: sender=16480, operation=17864
+Connection=17944; spawn Node layout=18032

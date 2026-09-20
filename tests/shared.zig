@@ -93,7 +93,8 @@ test "shared cancellation notifies all subscribers and started operations own th
         }
     };
     var receiver: Receiver = .{};
-    var operation = ex.connect(sender, &receiver);
+    var operation: ex.Connection(@TypeOf(sender), @TypeOf(&receiver)) = undefined;
+    ex.connectInto(&operation, sender, &receiver);
     operation.start();
     shared.deinit(); // The active operations now own all references.
     _ = source.requestStop();

@@ -7,6 +7,7 @@ const submitter = @import("submission.zig");
 const decode = @import("completion.zig").decode;
 const schedule_sender = @import("../../io/operations/nop.zig").schedule;
 const Context = @This();
+threadlocal var reactor_context: ?*Context = null;
 const Task = @import("../../detail/task.zig").Task;
 pub const Request = @import("request.zig");
 pub const Options = struct { entries: u16 = 64 };
@@ -16,12 +17,19 @@ ring: linux.IoUring,
 wake_fd: linux.fd_t,
 worker: std.Thread = undefined,
 mutex: sync.Mutex = .{},
-closing: bool = false,
+closing: std.atomic.Value(bool) = .init(false),
+inbox_pending: std.atomic.Value(bool) = .init(false),
+cancel_dirty: std.atomic.Value(bool) = .init(false),
 queue_head: ?*Request = null,
 queue_tail: ?*Request = null,
 task_head: ?*Task = null,
 task_tail: ?*Task = null,
-// Fields below belong to the reactor thread.
+// Fields below belong to the reactor thread. Remote inboxes are detached in
+// batches; reentrant submissions append here without locking.
+pending_head: ?*Request = null,
+pending_tail: ?*Request = null,
+local_task_head: ?*Task = null,
+local_task_tail: ?*Task = null,
 active: ?*Request = null,
 active_count: usize = 0,
 wake_armed: bool = false,
@@ -47,7 +55,7 @@ pub fn init(allocator: std.mem.Allocator, options: Options) !*Context {
 /// for target AND cancellation CQEs. Safe from any thread, including the reactor.
 pub fn shutdown(self: *Context) void {
     self.mutex.lock();
-    self.closing = true;
+    self.closing.store(true, .release);
     self.mutex.unlock();
     self.wake();
 }
@@ -79,8 +87,15 @@ pub fn getScheduler(self: *Context) Scheduler {
 
 pub fn submit(self: *Context, request: *Request) void {
     submitter.validate(request) catch |err| return request.finish(.{ .err = err });
+    if (reactor_context == self) {
+        if (self.closing.load(.acquire)) return request.finish(.{ .err = error.ContextClosed });
+        request.queue_next = null;
+        if (self.pending_tail) |tail| tail.queue_next = request else self.pending_head = request;
+        self.pending_tail = request;
+        return;
+    }
     self.mutex.lock();
-    if (self.closing) {
+    if (self.closing.load(.monotonic)) {
         self.mutex.unlock();
         request.finish(.{ .err = error.ContextClosed });
         return;
@@ -88,28 +103,59 @@ pub fn submit(self: *Context, request: *Request) void {
     request.queue_next = null;
     if (self.queue_tail) |tail| tail.queue_next = request else self.queue_head = request;
     self.queue_tail = request;
+    self.inbox_pending.store(true, .release);
     self.mutex.unlock();
     self.wake();
 }
 
 fn submitTask(self: *Context, task: *Task) error{ContextClosed}!void {
+    if (reactor_context == self) {
+        if (self.closing.load(.acquire)) return error.ContextClosed;
+        task.next = null;
+        if (self.local_task_tail) |tail| tail.next = task else self.local_task_head = task;
+        self.local_task_tail = task;
+        return;
+    }
     self.mutex.lock();
-    if (self.closing) {
+    if (self.closing.load(.monotonic)) {
         self.mutex.unlock();
         return error.ContextClosed;
     }
     task.next = null;
     if (self.task_tail) |tail| tail.next = task else self.task_head = task;
     self.task_tail = task;
+    self.inbox_pending.store(true, .release);
     self.mutex.unlock();
     self.wake();
 }
-fn runTasks(self: *Context) void {
+
+fn takeInbox(self: *Context) void {
+    if (!self.inbox_pending.load(.acquire)) return;
     self.mutex.lock();
-    var next = self.task_head;
+    const requests = self.queue_head;
+    const requests_tail = self.queue_tail;
+    const tasks = self.task_head;
+    const tasks_tail = self.task_tail;
+    self.queue_head = null;
+    self.queue_tail = null;
     self.task_head = null;
     self.task_tail = null;
+    self.inbox_pending.store(false, .monotonic);
     self.mutex.unlock();
+    if (requests) |head| {
+        if (self.pending_tail) |tail| tail.queue_next = head else self.pending_head = head;
+        self.pending_tail = requests_tail;
+    }
+    if (tasks) |head| {
+        if (self.local_task_tail) |tail| tail.next = head else self.local_task_head = head;
+        self.local_task_tail = tasks_tail;
+    }
+}
+
+fn runTasks(self: *Context) void {
+    var next = self.local_task_head;
+    self.local_task_head = null;
+    self.local_task_tail = null;
     // Take one batch so reentrant submissions cannot starve kernel completions.
     while (next) |task| {
         next = task.next;
@@ -119,7 +165,10 @@ fn runTasks(self: *Context) void {
 
 pub fn cancel(self: *Context, request: *Request) void {
     request.cancel_requested.store(true, .release);
-    self.wake();
+    // Publish AFTER the request flag. An exchange before a scan cannot lose a
+    // concurrent cancellation: it either joins this scan or triggers the next.
+    self.cancel_dirty.store(true, .release);
+    if (reactor_context != self) self.wake();
 }
 
 fn wake(self: *Context) void {
@@ -145,30 +194,19 @@ fn drainWake(self: *Context) void {
         }
     }
 }
-fn isClosing(self: *Context) bool {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-    return self.closing;
-}
 fn hasQueued(self: *Context) bool {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-    return self.queue_head != null;
+    return self.pending_head != null or self.local_task_head != null or self.inbox_pending.load(.acquire);
 }
 fn pop(self: *Context) ?*Request {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-    const request = self.queue_head orelse return null;
-    self.queue_head = request.queue_next;
-    if (self.queue_head == null) self.queue_tail = null;
+    const request = self.pending_head orelse return null;
+    self.pending_head = request.queue_next;
+    if (self.pending_head == null) self.pending_tail = null;
     return request;
 }
 fn putBack(self: *Context, request: *Request) void {
-    self.mutex.lock();
-    defer self.mutex.unlock();
-    request.queue_next = self.queue_head;
-    self.queue_head = request;
-    if (self.queue_tail == null) self.queue_tail = request;
+    request.queue_next = self.pending_head;
+    self.pending_head = request;
+    if (self.pending_tail == null) self.pending_tail = request;
 }
 
 fn finish(self: *Context, request: *Request) void {
@@ -192,10 +230,15 @@ fn enter(self: *Context, wait: u32) void {
 }
 
 fn run(self: *Context) void {
+    reactor_context = self;
+    defer reactor_context = null;
     var cqes: [64]linux.io_uring_cqe = undefined;
     while (true) {
+        const closing = self.closing.load(.acquire);
+        // After observing shutdown, this snapshot includes every remote request
+        // accepted before the shutdown admission lock closed the inbox.
+        self.takeInbox();
         self.runTasks();
-        const closing = self.isClosing();
         // Reserve/rearm the wake poll BEFORE filling the SQ. Never block in
         // io_uring_enter without a wake poll, even if submission was partial.
         if (!self.wake_armed and !closing) {
@@ -209,12 +252,14 @@ fn run(self: *Context) void {
         }
         // Cancellation has priority over new submissions under queue pressure.
         var pending_cancels = false;
-        var active = self.active;
+        const scan_cancels = closing or (self.cancel_dirty.load(.acquire) and self.cancel_dirty.swap(false, .acquire));
+        var active = if (scan_cancels) self.active else null;
         while (active) |request| : (active = request.next) {
             if (request.result != null or request.cancel_sent) continue;
             if (!closing and !request.cancel_requested.load(.acquire)) continue;
             const sqe = self.ring.get_sqe() catch {
                 pending_cancels = true;
+                self.cancel_dirty.store(true, .release);
                 break;
             };
             sqe.prep_cancel(@intFromPtr(request), 0);
@@ -239,11 +284,7 @@ fn run(self: *Context) void {
             self.active = request;
             self.active_count += 1;
         }
-        if (closing and self.active_count == 0) {
-            // A submission may have raced the batch snapshot before shutdown.
-            self.runTasks();
-            break;
-        }
+        if (closing and self.active_count == 0 and !self.hasQueued()) break;
         // SQ capacity limits each batch, not the number of in-flight operations.
         // Flush pending batches without waiting for blocking reads to complete.
         self.enter(if (pending_cancels or self.hasQueued()) 0 else 1);

@@ -95,21 +95,25 @@ test "shutdown cancels outstanding work and rejects new submissions" {
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: *const @Tuple(&.{})) void {
+        pub fn setValue(self: *@This(), _: *const @Tuple(&.{})) void {
+            defer self.completeOwnership();
             @panic("unexpected timer expiration");
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected error");
         }
         pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             self.stopped = true;
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.done.set();
         }
     };
     var receiver: Receiver = .{};
-    var operation = ex.connect(ex.io.sleepFor(context, 60 * std.time.ns_per_s), &receiver);
+    var operation: ex.Connection(@TypeOf(ex.io.sleepFor(context, 60 * std.time.ns_per_s)), @TypeOf(&receiver)) = undefined;
+    ex.connectInto(&operation, ex.io.sleepFor(context, 60 * std.time.ns_per_s), &receiver);
     operation.start();
     context.shutdown();
     receiver.done.wait();
@@ -158,27 +162,30 @@ test "queue pressure flushes blocking receives before their later send" {
         remaining: std.atomic.Value(usize) = .init(count),
         failed: std.atomic.Value(bool) = .init(false),
         done: Event = .{},
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             if (self.remaining.fetchSub(1, .acq_rel) == 1) self.done.set();
         }
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
         pub fn setValue(self: *@This(), value: *const @Tuple(&.{usize})) void {
+            defer self.completeOwnership();
             if (value.*[0] != 1) self.failed.store(true, .release);
         }
         pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             self.failed.store(true, .release);
         }
         pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             self.failed.store(true, .release);
         }
     };
     var receiver: Receiver = .{};
-    const Operation = ex.Connection(@TypeOf(ex.io.recv(context, sockets[0], &buffers[0], 0)));
+    const Operation = ex.Connection(@TypeOf(ex.io.recv(context, sockets[0], &buffers[0], 0)), *Receiver);
     var operations: [count]Operation = undefined;
     for (&operations, &buffers) |*operation, *buffer| {
-        operation.* = ex.connect(ex.io.recv(context, sockets[0], buffer, 0), &receiver);
+        ex.connectInto(operation, ex.io.recv(context, sockets[0], buffer, 0), &receiver);
         operation.start();
     }
     const data: [count]u8 = @splat('x');
@@ -196,23 +203,26 @@ test "repeated in-flight cancellation safely reuses operation addresses" {
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: *const @Tuple(&.{})) void {
+        pub fn setValue(self: *@This(), _: *const @Tuple(&.{})) void {
+            defer self.completeOwnership();
             @panic("timer unexpectedly elapsed");
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected timer error");
         }
         pub fn setStopped(self: *@This()) void {
-            _ = self;
+            defer self.completeOwnership();
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.done.set();
         }
     };
     for (0..100) |_| {
         var source: ex.StopSource = .{};
         var receiver: Receiver = .{};
-        var operation = ex.connect(ex.io.sleepFor(context, 60 * std.time.ns_per_s).withStopToken(source.token()), &receiver);
+        var operation: ex.Connection(@TypeOf(ex.io.sleepFor(context, 60 * std.time.ns_per_s).withStopToken(source.token())), @TypeOf(&receiver)) = undefined;
+        ex.connectInto(&operation, ex.io.sleepFor(context, 60 * std.time.ns_per_s).withStopToken(source.token()), &receiver);
         operation.start();
         _ = try context.getScheduler().schedule().syncWait(.{ .allocator = std.testing.allocator });
         _ = source.requestStop();
@@ -221,34 +231,37 @@ test "repeated in-flight cancellation safely reuses operation addresses" {
     }
 }
 
-test "I/O setFinished may release its root connection" {
+test "I/O completion may release its root connection" {
     const context = try ex.IoUring.init(t.allocator, .{});
     defer context.deinit();
     const sender = ex.io.sleepFor(context, std.time.ns_per_ms);
-    const Operation = ex.Connection(@TypeOf(sender));
     const Receiver = struct {
+        const Operation = ex.Connection(@TypeOf(sender), *@This());
         operation: *Operation,
         done: Event = .{},
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
         pub fn setValue(self: *@This(), _: *const @Tuple(&.{})) void {
-            _ = self;
+            defer self.completeOwnership();
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             t.allocator.destroy(self.operation);
             self.done.set();
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected I/O error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stopped");
         }
     };
+    const Operation = Receiver.Operation;
     const operation = try t.allocator.create(Operation);
     var receiver: Receiver = .{ .operation = operation };
-    operation.* = ex.connect(sender, &receiver);
+    ex.connectInto(operation, sender, &receiver);
     operation.start();
     receiver.done.wait();
 }
@@ -263,20 +276,23 @@ test "a shared timer executes once and survives owner release during pending I/O
             return .{ .allocator = std.testing.allocator };
         }
         pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
-            _ = self;
+            defer self.completeOwnership();
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.done.set();
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected I/O error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stopped");
         }
     };
     var receiver: Receiver = .{};
-    var operation = ex.connect(ex.whenAll(.{ shared.sender(), shared.sender() }), &receiver);
+    var operation: ex.Connection(@TypeOf(ex.whenAll(.{ shared.sender(), shared.sender() })), @TypeOf(&receiver)) = undefined;
+    ex.connectInto(&operation, ex.whenAll(.{ shared.sender(), shared.sender() }), &receiver);
     operation.start();
     shared.deinit();
     receiver.done.wait();
@@ -406,20 +422,24 @@ test "counting join uses io_uring scheduler supplied by receiver environment" {
             return .{ .start_scheduler = self.scheduler };
         }
         pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
+            defer self.completeOwnership();
             self.id = std.Thread.getCurrentId();
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected scheduling error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stopped");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.done.set();
         }
     };
     var capture: Capture = .{ .scheduler = ex.StartScheduler.init(&scheduler) };
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     association.deinit();
     capture.done.wait();
@@ -446,14 +466,18 @@ test "shutdown drains erased scheduler jobs already accepted behind a busy react
         pub fn getEnv(_: *@This()) ex.Env {
             return .{};
         }
-        pub fn setValue(_: *@This(), _: *const ex.Values(.{})) void {}
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
+            defer self.completeOwnership();
+        }
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("accepted task lost");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected cancellation");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.done.set();
         }
     };
@@ -468,13 +492,14 @@ test "shutdown drains erased scheduler jobs already accepted behind a busy react
     var entered: Event = .{};
     var release: Event = .{};
     var first: Capture = .{};
-    var blocker = ex.connect(ex.schedule(erased).then(Block, .{ &entered, &release }), &first);
+    var blocker: ex.Connection(@TypeOf(ex.schedule(erased).then(Block, .{ &entered, &release })), @TypeOf(&first)) = undefined;
+    ex.connectInto(&blocker, ex.schedule(erased).then(Block, .{ &entered, &release }), &first);
     blocker.start();
     entered.wait();
     var captures: [32]Capture = @splat(.{});
-    var ops: [32]ex.Connection(ex.Schedule(ex.StartScheduler)) = undefined;
+    var ops: [32]ex.Connection(ex.Schedule(ex.StartScheduler), *Capture) = undefined;
     for (&ops, &captures) |*op, *capture| {
-        op.* = ex.connect(ex.schedule(erased), capture);
+        ex.connectInto(op, ex.schedule(erased), capture);
         op.start();
     }
     context.shutdown();
@@ -520,4 +545,67 @@ test "whenAny timeout drains cancelled recv before downstream reuses the buffer"
     try t.expect(result == .read);
     try t.expectEqual(4, result.read[0]);
     try t.expectEqualStrings("pong", &buffer);
+}
+
+test "event-triggered cancellation retries a full SQ and drains local submissions" {
+    const context = try ex.IoUring.init(t.allocator, .{ .entries = 2 });
+    defer context.deinit();
+    var source: ex.StopSource = .{};
+    defer source.deinit();
+    const count = 128;
+    const Capture = struct {
+        remaining: std.atomic.Value(usize) = .init(count),
+        done: Event = .{},
+        pub fn getEnv(_: *@This()) ex.Env {
+            return .{};
+        }
+        pub fn setValue(self: *@This(), _: *const ex.Values(.{})) void {
+            defer self.completeOwnership();
+            @panic("timer elapsed");
+        }
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
+            @panic("timer failed");
+        }
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
+        }
+        fn completeOwnership(self: *@This()) void {
+            if (self.remaining.fetchSub(1, .acq_rel) == 1) self.done.set();
+        }
+    };
+    // Schedule arrives through the shared inbox, then starts the timer locally.
+    const sender = ex.io.sleepFor(context, 60 * std.time.ns_per_s).startsOn(context.getScheduler()).withStopToken(source.token());
+    var capture: Capture = .{};
+    var operations: [count]ex.Connection(@TypeOf(sender), *Capture) = undefined;
+    for (&operations) |*op| {
+        ex.connectInto(op, sender, &capture);
+        op.start();
+    }
+    _ = try context.getScheduler().schedule().syncWait(.{});
+    _ = source.requestStop();
+    capture.done.wait();
+}
+
+test "reactor local scheduler submissions defer to the next batch without a wake" {
+    const context = try ex.IoUring.init(t.allocator, .{ .entries = 2 });
+    defer context.deinit();
+    const State = struct {
+        task: ex.ScheduleTask = .{ .run = run },
+        scheduler: ex.IoUring.Scheduler,
+        calls: usize = 0,
+        done: Event = .{},
+        fn run(task: *ex.ScheduleTask) void {
+            const self: *@This() = @fieldParentPtr("task", task);
+            self.calls += 1;
+            if (self.calls == 10_000) return self.done.set();
+            const before = self.calls;
+            self.scheduler.submit(task) catch @panic("unexpected shutdown");
+            std.debug.assert(self.calls == before);
+        }
+    };
+    var state: State = .{ .scheduler = context.getScheduler() };
+    try state.scheduler.submit(&state.task);
+    state.done.wait();
+    try t.expectEqual(10_000, state.calls);
 }

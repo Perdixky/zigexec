@@ -49,26 +49,25 @@ pub const IntCapture = struct {
 pub const AwaitStop = struct {
     entered: ?*Event = null,
     pub const Values = Empty;
-    pub const Operation = struct {
-        receiver: ex.Receiver(Values),
-        entered: ?*Event,
-        callback: ex.StopCallback = .{},
-        pub fn start(self: *@This()) void {
-            const entered = self.entered;
-            ex.Scope.acquire(self.receiver.env.scope);
-            self.callback.init(self.receiver.env.stop_token, self, canceled);
-            if (entered) |event| event.set();
-        }
-        fn canceled(ctx: *anyopaque) void {
-            const self: *@This() = @ptrCast(@alignCast(ctx));
-            const receiver = self.receiver;
-            const scope = receiver.env.scope;
-            defer ex.Scope.release(scope);
-            self.callback.deinit();
-            receiver.setStopped();
-        }
-    };
-    pub fn connect(self: AwaitStop, receiver: ex.Receiver(Values)) Operation {
-        return .{ .receiver = receiver, .entered = self.entered };
+    pub fn Operation(comptime R: type) type {
+        return struct {
+            receiver: ex.TypedReceiver(Values, R),
+            entered: ?*Event,
+            callback: ex.StopCallback = .{},
+            pub fn start(self: *@This()) void {
+                const entered = self.entered;
+                if (entered) |event| event.set();
+                self.callback.init(self.receiver.getEnv().stop_token, self, canceled);
+            }
+            fn canceled(ctx: *anyopaque) void {
+                const self: *@This() = @ptrCast(@alignCast(ctx));
+                const receiver = self.receiver;
+                self.callback.deinit();
+                receiver.setStopped();
+            }
+        };
+    }
+    pub fn connectInto(self: AwaitStop, out: anytype, receiver: anytype) void {
+        out.* = .{ .receiver = .init(receiver), .entered = self.entered };
     }
 };

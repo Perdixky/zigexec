@@ -13,16 +13,21 @@ pub fn Shared(comptime S: type) type {
         pub const Values = S.Values;
         const Result = c.Completion(Values);
 
+        // The heterogeneous subscription queue erases only queue notification,
+        // not the receiver stored in each concrete subscription operation.
+        const Waiter = struct {
+            next: ?*Waiter = null,
+            notify: *const fn (*Waiter, *const Result) void,
+        };
         const State = struct {
             allocator: std.mem.Allocator,
             references: std.atomic.Value(usize) = .init(1),
             mutex: sync.Mutex = .{},
-            upstream: S,
-            operation: @import("../execution/connect.zig").Connection(S) = undefined,
+            operation: @import("../execution/connect.zig").Connection(S, *State) = undefined,
             stop: c.StopSource = .{},
             started: bool = false,
             result: ?Result = null,
-            waiters: ?*View.Operation = null,
+            waiters: ?*Waiter = null,
 
             fn retain(self: *State) void {
                 _ = self.references.fetchAdd(1, .monotonic);
@@ -46,12 +51,10 @@ pub fn Shared(comptime S: type) type {
                 self.mutex.unlock();
                 while (waiters) |waiter| {
                     waiters = waiter.next;
-                    waiter.finish(&self.result.?);
+                    waiter.notify(waiter, &self.result.?);
                 }
-                // The upstream reference keeps State alive throughout notification,
-                // including reentrant subscriptions and owner destruction.
-            }
-            pub fn setFinished(self: *State) void {
+                // The upstream reference protects this notification loop, including
+                // reentrant subscriptions and owner destruction. Release last.
                 self.release();
             }
             pub fn setValue(self: *State, values: *const Values) void {
@@ -69,63 +72,62 @@ pub fn Shared(comptime S: type) type {
             state: *State,
             pub const Values = S.Values;
             pub const can_error = @import("../detail/completion_traits.zig").canError(S);
-            pub const Operation = struct {
-                state: *State,
-                receiver: c.Receiver(S.Values),
-                next: ?*@This() = null,
-                result: Result = undefined,
-                stop_callback: c.StopCallback = .{},
-                started: bool = false,
-                const Op = @This();
-                pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
-                    const state = self.state;
-                    c.Scope.acquire(self.receiver.env.scope);
-                    state.retain(); // This subscription owns State until finish.
-                    self.stop_callback.init(self.receiver.env.stop_token, self, cancel);
-                    state.mutex.lock();
-                    if (state.result) |*result| {
+            pub fn Operation(comptime R: type) type {
+                return struct {
+                    state: *State,
+                    receiver: c.TypedReceiver(S.Values, R),
+                    waiter: Waiter = .{ .notify = notify },
+                    result: Result = undefined,
+                    stop_callback: c.StopCallbackFor(R) = .{},
+                    started: bool = false,
+                    const Op = @This();
+                    pub fn start(self: *Op) void {
+                        std.debug.assert(!self.started);
+                        self.started = true;
+                        const state = self.state;
+                        state.retain(); // This subscription owns State until finish.
+                        self.stop_callback.init(self.receiver.getEnv().stop_token, self, cancel);
+                        state.mutex.lock();
+                        if (state.result) |*result| {
+                            state.mutex.unlock();
+                            self.finish(result);
+                            return;
+                        }
+                        const first = !state.started;
+                        if (first) {
+                            state.started = true;
+                            state.retain(); // Independent lifetime for the upstream.
+                        }
+                        self.waiter.next = state.waiters;
+                        state.waiters = &self.waiter;
                         state.mutex.unlock();
+                        if (first) {
+                            state.operation.start();
+                        }
+                    }
+                    fn cancel(ctx: *anyopaque) void {
+                        const self: *Op = @ptrCast(@alignCast(ctx));
+                        const state = self.state;
+                        state.retain();
+                        _ = state.stop.requestStop();
+                        state.release();
+                    }
+                    fn notify(waiter: *Waiter, result: *const Result) void {
+                        const self: *Op = @fieldParentPtr("waiter", waiter);
                         self.finish(result);
-                        return;
                     }
-                    const first = !state.started;
-                    if (first) {
-                        state.started = true;
-                        state.retain(); // Independent lifetime for the upstream.
+                    fn finish(self: *Op, result: *const Result) void {
+                        const receiver = self.receiver;
+                        const state = self.state;
+                        self.result = result.*;
+                        self.stop_callback.deinit();
+                        state.release();
+                        receiver.complete(&self.result);
                     }
-                    self.next = state.waiters;
-                    state.waiters = self;
-                    state.mutex.unlock();
-                    if (first) {
-                        state.operation = c.connect(state.upstream, state);
-                        state.operation.start();
-                    }
-                }
-                fn cancel(ctx: *anyopaque) void {
-                    const self: *Op = @ptrCast(@alignCast(ctx));
-                    const scope = self.receiver.env.scope;
-                    c.Scope.acquire(scope);
-                    defer c.Scope.release(scope);
-                    const state = self.state;
-                    state.retain();
-                    _ = state.stop.requestStop();
-                    state.release();
-                }
-                fn finish(self: *Op, result: *const Result) void {
-                    const receiver = self.receiver;
-                    const scope = receiver.env.scope;
-                    const state = self.state;
-                    self.result = result.*;
-                    self.stop_callback.deinit();
-                    state.release();
-                    receiver.complete(&self.result);
-                    c.Scope.release(scope);
-                }
-            };
-            pub fn connect(self: View, receiver: c.Receiver(S.Values)) Operation {
-                return .{ .state = self.state, .receiver = receiver };
+                };
+            }
+            pub fn connectInto(self: View, out: anytype, receiver: anytype) void {
+                out.* = .{ .state = self.state, .receiver = .init(receiver) };
             }
         };
 
@@ -155,6 +157,7 @@ pub fn Shared(comptime S: type) type {
 pub fn split(allocator: std.mem.Allocator, sender: anytype) !Shared(@TypeOf(sender)) {
     const T = Shared(@TypeOf(sender));
     const state = try allocator.create(T.State);
-    state.* = .{ .allocator = allocator, .upstream = sender };
+    state.* = .{ .allocator = allocator };
+    c.connectInto(&state.operation, sender, state);
     return .{ .state = state };
 }

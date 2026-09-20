@@ -68,7 +68,7 @@ const task = source.letValue(
 zigexec.then: wrong_input.Length.call upstream argument 0: expected []const u8, got i64
 ```
 
-`letValue` 也接受已构造的 sender：`source.letValue(child, .{})` 在上游成功后连接并启动 child，不把上游值注入 child；需要使用上游值时使用工厂或 `upstream()` 子链。sender/子链形式的第二个参数必须是空的 `.{}`，三种形式均在编译期分派。
+`letValue` 也接受已构造的 sender：`source.letValue(child, .{})` 在外层 connect 时连接 child，在上游成功后启动它，不把上游值注入 child；需要使用上游值时使用工厂或 `upstream()` 子链。sender/子链形式的第二个参数必须是空的 `.{}`，三种形式均在编译期分派。
 
 完整语义、异步借用限制和迁移说明见 [链式表达式设计](docs/expressions.zh-CN.md)。
 
@@ -112,11 +112,11 @@ Zig 仍要求函数边界声明返回类型，库不能提供任意函数体的 
 | 普通值恢复 | `.uponError(Callback, args)`、`.uponStopped(Callback, args)` |
 | 异步工厂/恢复 | `.letValue(Factory, args)`、`.letError(Factory, args)`、`.letStopped(Factory, args)` |
 | 子链/顺序执行 | `.letValue(body, .{})` 绑定 `upstream()` 子链；`.letValue(child, .{})` 顺序启动已有 sender |
-| 重复执行 | `.repeatEffect()`、`.repeatEffectUntil()` |
+| 重复执行 | `.repeat()`、`.repeatUntil()` |
 | 并发结果 | `whenAll(.{a, b, ...})` → 拼接完成参数，`whenAny(.{ .a = a, .b = b })` → union |
 | scope 关联 | `.associate(token)` → owner，通过 `.sender()` / `.takeSender()` 组合，`.deinit()` 释放 |
 | 逐索引执行 | `.bulk(count, Callback, args)` |
-| 执行上下文 | `ThreadPool`、`RunLoop`、`InlineScheduler`、`IoUring` |
+| 执行上下文 | `ThreadPool`、`RunLoop`、`InlineScheduler`、`TrampolineScheduler`、`IoUring` |
 | 调度 | `scheduler.schedule()`、`.startsOn(scheduler)`、`.continuesOn(scheduler)` |
 | 取消 | `StopSource`、`StopToken`、`StopCallback`、`.withStopToken(token)` |
 | 共享计算 | `.split(allocator)`，owner 的 `.sender()`、`.clone()`、`.deinit()`、`.requestStop()` |
@@ -209,11 +209,12 @@ nc 127.0.0.1 9000
 
 实现见 [examples/tcp_echo.zig](examples/tcp_echo.zig)。默认端口为 9000，传 0 由内核选择空闲端口；可用 `--once` 在一个连接结束后退出，例如 `zig build run-echo -- 9000 --once`。
 
-服务只有一条 accept 循环，每次接入立即 spawn 独立的 `recv → sendAll → repeatEffect`
-echo 子链，所有子链使用同一个 io_uring 调度器。每条子链的 operation 拥有独立的
-16 KiB buffer，`CountingScope` 跟踪关联，独立的 `ex.spawn` 在 `setFinished` 后回收子任务。
-`ex.runInScope(&scope, accept_loop)` 管理接入与排空，main 最后只调用一次 syncWait；
-`--once` 接入一个连接后等待其子链正常结束。callback 内没有阻塞等待。
+服务只有一条 accept 循环。accept 回调直接分配、连接并启动每个客户端的
+`recv → sendAll → repeat` operation；所有客户端都在同一个 reactor 上执行。
+每个 Client 持有独立的 16 KiB buffer 和 `Connection`，通过普通 intrusive 链表管理，
+在完成通知中摘链、关闭 socket 并回收。此单线程示例不需要 `spawn`、CountingScope
+或每连接 stop source。`--once` 等待唯一客户端完全退出；accept 失败通过 context
+shutdown 取消在途 I/O，并等待实际完成后退出。main 只等待最终排空通知。
 
 `sendAll` 处理短写，`MSG.NOSIGNAL` 避免 SIGPIPE。`zig build test-echo` 验证
 32 个同时收发的客户端加一个空闲连接、1 MiB 二进制/分段输入、半关闭、重置、重连
@@ -246,7 +247,7 @@ tests/                # 单元、内核集成及 compile_fail 诊断测试
 examples/             # CPU、io_uring 文件流水线与 TCP echo
 ```
 
-自定义 sender 提供 `Values`、`Operation`、`connect(Receiver(Values)) Operation`；operation 提供 `start(*Self) void`。`ex.asSender(custom)` 提供链式方法。每个 operation 只启动一次，启动后保持地址稳定，并恰好发送一次完成。`setValue` 接收 `*const Values`，发布的结果须来自稳定存储。`ex.connect` 返回 `Connection(S)`；根 receiver 只能在 `setFinished` 中回收 connection。自定义异步 sender 必须在提交前 acquire Env.scope，在收尾后 release。详见 [生命周期协议](docs/lifetimes.zh-CN.md)。
+自定义 sender 提供 `Values`、`Operation(R)`、`connectInto(&operation, receiver)`；operation 提供 `start(*Self) void`。`ex.asSender(custom)` 提供链式方法。每个 operation 只启动一次，从连接开始保持地址稳定，并恰好发送一次完成。`setValue` 接收 `*const Values`，发布的结果须来自稳定存储。`ex.connectInto` 原地构造 `Connection(S, R)`；根 receiver 可以在完成通知中回收 connection，生产者通知后不得再访问 operation。拥有者仍可保留 child 以继续借用结果。不可取消环境 `UnstoppableEnv` 可消除取消 callback 存储。详见 [生命周期协议](docs/lifetimes.zh-CN.md)。
 
 自定义 scheduler 的 `schedule()` 返回空成功 tuple 的 sender。I/O context 的请求协议见 [架构与 stdexec 对应](docs/design.zh-CN.md)。
 
@@ -265,8 +266,40 @@ const dep = b.dependency("zigexec", .{ .target = target, .optimize = optimize })
 exe.root_module.addImport("zigexec", dep.module("zigexec"));
 ```
 
-当前仍不是完整的 C++26 标准实现：每个 sender 只有一个成功 tuple 类型，错误统一为 `anyerror`；尚无 `on` 环境恢复、完整 P3149 async-scope API（包括 `spawnFuture`）、GPU 与协程互操作。共享结果使用 Zig 值复制，没有隐式 RAII 或深拷贝。跨平台后端、性能基准和 sanitizer 验证尚待补充。
+当前仍不是完整的 C++26 标准实现：每个 sender 只有一个成功 tuple 类型，错误统一为 `anyerror`；尚无 `on` 环境恢复、完整 P3149 async-scope API（包括 `spawnFuture`）、GPU 与协程互操作。共享结果使用 Zig 值复制，没有隐式 RAII 或深拷贝。跨平台后端、TCP echo 以外的性能基准和 sanitizer 验证尚待补充。
+
+### 手工连接的地址契约
+
+```zig
+var operation: ex.Connection(@TypeOf(sender), @TypeOf(&receiver)) = undefined;
+ex.connectInto(&operation, sender, &receiver);
+operation.start();
+```
+
+`Operation(R)` 保留 receiver 的具体类型。连接即在最终地址构造已知子节点，之后禁止复制/移动，保持稳定直到拥有者在 completion 中或之后回收。旧的两参数、按值返回 `connect` 已改为三参数原地形式；`then/letValue/syncWait/spawn` 的调用方式不变。详见 [生命周期协议](docs/lifetimes.zh-CN.md)。
+
+## 性能基准
+
+[`benchmarks/`](benchmarks/README.md) 提供与 libxev、zio 的 Linux TCP echo
+对比，包含固定依赖版本、原生负载器、吞吐量、RTT、CPU 使用率和原始测量数据。
+最新完整结果见 [最终性能报告](benchmarks/PERFORMANCE.zh-CN.md)，涵盖六场景、perf 与内存布局。
+复现方法与限制见基准说明；[第一轮优化报告](benchmarks/OPTIMIZATION.zh-CN.md) 记录当时的结果及 API 迁移，
+[原始测试报告](benchmarks/REPORT.zh-CN.md) 保留优化前分析。
+这些结果只代表已测的 TCP 工作负载，不是异步库的综合排名。
+
+![六种 TCP echo 工作负载的吞吐对比](benchmarks/results/2026-09-20-final-throughput.svg)
+
+![64 字节、256 连接时的用户态 CPU 成本](benchmarks/results/2026-09-20-final-user-cost.svg)
+
+柱为中位数，点为每次独立试验。在本次 Ryzen 5 7500F Linux loopback、
+单服务端核测试中，zigexec 六场景吞吐相对 libxev 为 -1.9%～+2.0%，六场景中
+五个高于 zio；最终 completion protocol 相对上一版将每次 echo 的用户态 cycles
+降低 24.8%、instructions 降低 33.8%。这些数字只适用于报告中的 TCP 配置；
+测试方法、延迟、样本区间和解释边界以最终性能报告为准。
 
 ## 许可证
 
 本项目使用 [Mozilla Public License 2.0](LICENSE)。
+
+本轮 stdexec 对照、trampoline/repeat、批量 io_uring 与手工 echo operation 的实现和测量见
+[第二轮优化报告](benchmarks/STDEXEC.zh-CN.md)。

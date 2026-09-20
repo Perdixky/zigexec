@@ -141,36 +141,39 @@ test "letError can recover asynchronously with multiple success values" {
     try testing.expect(result[1]);
 }
 
-test "setFinished may destroy the connection including inline whenAll parent" {
+test "completion may destroy the connection including inline whenAll parent" {
     const sender = ex.whenAll(.{
         ex.just(.{21}).then(ex.Fn(double), .{}),
         ex.just(.{}).startsOn(ex.InlineScheduler{}),
     });
-    const Operation = ex.Connection(@TypeOf(sender));
     const Destroy = struct {
+        const Operation = ex.Connection(@TypeOf(sender), *@This());
         operation: *Operation,
         called: bool = false,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
         pub fn setValue(self: *@This(), values: *const Ints) void {
+            defer self.completeOwnership();
             std.debug.assert(values.*[0] == 42);
-            _ = self;
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             testing.allocator.destroy(self.operation);
             self.called = true;
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stopped");
         }
     };
+    const Operation = Destroy.Operation;
     const operation = try testing.allocator.create(Operation);
     var receiver: Destroy = .{ .operation = operation };
-    operation.* = ex.connect(sender, &receiver);
+    ex.connectInto(operation, sender, &receiver);
     operation.start();
     try testing.expect(receiver.called);
 }
@@ -247,4 +250,16 @@ test "whenAll preserves tuple valued arguments and syncWait packages mixed arity
     try testing.expectEqual(20, result[0]);
     try testing.expect(result[1]);
     try testing.expectEqual(22, result[2]);
+}
+
+test "single input whenAll forwards all channels and the parent stop token" {
+    var source: ex.StopSource = .{};
+    defer source.deinit();
+    const result = (try ex.whenAll(.{ex.readEnv()}).syncWait(.{ .stop_token = source.token() })).?;
+    try testing.expectEqual(source.token().source, result[0].stop_token.source);
+    try testing.expectError(error.Single, ex.whenAll(.{ex.justError(ex.Values(.{u8}), error.Single)}).syncWait(.{}));
+    try testing.expectEqual(null, try ex.whenAll(.{ex.justStopped(ex.Values(.{u8}))}).syncWait(.{}));
+    const tuple = (try ex.whenAll(.{ex.just(.{ @as(u8, 42), true })}).syncWait(.{})).?;
+    try testing.expectEqual(@as(u8, 42), tuple[0]);
+    try testing.expect(tuple[1]);
 }

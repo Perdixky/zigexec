@@ -1,0 +1,3 @@
+Echo storage=16400; Echo loop operation=952
+Client connection=1032; manually owned Client=17456
+Server=584; accept connection=496

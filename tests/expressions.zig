@@ -50,8 +50,8 @@ test "body construction and connect do not execute factories and operations are 
     var calls: usize = 0;
     const task = ex.just(40).letValue(ex.upstream().letValue(Factory, .{ &calls, 1 }), .{});
     var capture: support.IntCapture = .{};
-    const unstarted = ex.connect(task, &capture);
-    var operation = unstarted;
+    var operation: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&operation, task, &capture);
     try t.expectEqual(0, calls);
     operation.start();
     try t.expectEqual(42, capture.values.?[0]);
@@ -129,8 +129,8 @@ test "slice values keep the allocation address across asynchronous composition" 
     var seen: ?[]u8 = null;
     const task = ex.just(buffer).letValue(ex.upstream().letValue(Forward, .{ loop.getScheduler(), &seen }).then(Read, .{}), .{});
     var capture: support.IntCapture = .{};
-    const unstarted = ex.connect(task, &capture);
-    var operation = unstarted;
+    var operation: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&operation, task, &capture);
     operation.start();
     try t.expectEqual(0, capture.completions);
     try t.expectEqual(buffer.ptr, seen.?.ptr);
@@ -160,7 +160,8 @@ test "factory pointer self lends captured storage until asynchronous completion"
     var seen: ?*i64 = null;
     const task = ex.just(.{}).letValue(ex.upstream().letValue(Factory, .{ loop.getScheduler(), 40, &seen }).then(Read, .{}), .{});
     var capture: support.IntCapture = .{};
-    var operation = ex.connect(task, &capture);
+    var operation: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&operation, task, &capture);
     operation.start();
     try t.expectEqual(0, capture.completions);
     try t.expect(@intFromPtr(seen.?) >= @intFromPtr(&operation));
@@ -173,17 +174,19 @@ test "factory pointer self lends captured storage until asynchronous completion"
 test "upstream operation storage stays alive through scoped continuation" {
     const Source = struct {
         pub const Values = ex.Values(.{[]const u8});
-        pub const Operation = struct {
-            receiver: ex.Receiver(Values),
-            output: Values = undefined,
-            buffer: [3]u8 = .{ 20, 21, 1 },
-            pub fn start(self: *@This()) void {
-                self.output = .{&self.buffer};
-                self.receiver.setValue(&self.output);
-            }
-        };
-        pub fn connect(_: @This(), receiver: ex.Receiver(Values)) Operation {
-            return .{ .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                receiver: ex.TypedReceiver(Values, R),
+                output: Values = undefined,
+                buffer: [3]u8 = .{ 20, 21, 1 },
+                pub fn start(self: *@This()) void {
+                    self.output = .{&self.buffer};
+                    self.receiver.setValue(&self.output);
+                }
+            };
+        }
+        pub fn connectInto(_: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .receiver = .init(receiver) };
         }
     };
     const Sum = struct {
@@ -196,7 +199,8 @@ test "upstream operation storage stays alive through scoped continuation" {
     var loop: ex.RunLoop = .{};
     const task = ex.asSender(Source{}).letValue(ex.upstream().continuesOn(loop.getScheduler()).then(Sum, .{}), .{});
     var capture: support.IntCapture = .{};
-    var operation = ex.connect(task, &capture);
+    var operation: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&operation, task, &capture);
     operation.start();
     try t.expectEqual(0, capture.completions);
     loop.finish();
@@ -231,33 +235,36 @@ test "expression recovery and bulk preserve error stopped and environment semant
     try t.expectEqual(null, try ex.just(1).letValue(body, .{}).withStopToken(source.token()).syncWait(.{ .allocator = std.testing.allocator }));
 }
 
-test "scoped connection may be destroyed in setFinished" {
+test "scoped connection may be destroyed in completion" {
     const task = ex.just(20).letValue(ex.upstream().letValue(Duplicate, .{}).then(Add, .{2}), .{});
-    const Op = ex.Connection(@TypeOf(task));
     const Destroy = struct {
+        const Op = ex.Connection(@TypeOf(task), *@This());
         op: *Op,
         called: bool = false,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
         pub fn setValue(self: *@This(), values: *const ex.Values(.{i64})) void {
+            defer self.completeOwnership();
             std.debug.assert(values.*[0] == 42);
-            _ = self;
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             t.allocator.destroy(self.op);
             self.called = true;
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("unexpected stopped");
         }
     };
+    const Op = Destroy.Op;
     const op = try t.allocator.create(Op);
     var receiver: Destroy = .{ .op = op };
-    op.* = ex.connect(task, &receiver);
+    ex.connectInto(op, task, &receiver);
     op.start();
     try t.expect(receiver.called);
 }
@@ -320,7 +327,8 @@ test "concrete continuation is started lazily and skipped on upstream error or s
     const child = ex.just(42).then(Count, .{&calls});
     const task = ex.just(.{}).letValue(child, .{});
     var capture: support.IntCapture = .{};
-    var operation = ex.connect(task, &capture);
+    var operation: ex.Connection(@TypeOf(task), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&operation, task, &capture);
     try t.expectEqual(0, calls);
     try t.expectError(error.Upstream, ex.justError(ex.Values(.{}), error.Upstream).letValue(child, .{}).syncWait(.{ .allocator = t.allocator }));
     try t.expectEqual(null, try ex.justStopped(ex.Values(.{})).letValue(child, .{}).syncWait(.{ .allocator = t.allocator }));

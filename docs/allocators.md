@@ -19,12 +19,15 @@ Reviewed on 2026-09-18 against [P2300R10](https://www.open-std.org/jtc1/sc22/wg2
 
 ## zigexec's API choice
 
-zigexec uses a fixed `Env` structure with an optional
+zigexec provides dynamic `Env` and typed `UnstoppableEnv`, both with an optional
 `?std.mem.Allocator = null`. `syncWait` still receives an environment
 explicitly. A task that never queries an allocator can use
 `task.syncWait(.{})`; a missing allocator is reported as
 `error.MissingAllocator` only when a query is executed. No global allocator is
-selected implicitly.
+selected implicitly. Omitting the stop token in a literal environment preserves
+a compile-time never-stop token; built-in adaptors retain this type and can omit
+cancellation callback storage. Explicit `Env` retains dynamic cancellation. See
+[operation lifetimes](lifetimes.md).
 
 ```zig
 const env: ex.Env = .{

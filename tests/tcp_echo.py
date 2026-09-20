@@ -119,7 +119,7 @@ def main(binary):
             assert receive_exact(idle, 20) == b"idle client survived"
         assert process.poll() is None
 
-    # --once means drain the spawned echo, not return when spawn succeeds.
+    # --once drains the manually owned operation, including its retirement.
     with server(binary, once=True) as (process, address):
         with socket.create_connection(address, timeout=10) as client:
             for payload in (b"first round", b"second round"):
@@ -128,6 +128,13 @@ def main(binary):
                 assert process.poll() is None, "--once exited before the child finished"
             client.shutdown(socket.SHUT_WR)
             assert client.recv(1) == b""
+        assert process.wait(timeout=10) == 0
+
+    # The error completion must also retire a manually owned --once operation.
+    with server(binary, once=True) as (process, address):
+        with socket.create_connection(address, timeout=10) as client:
+            client.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            client.sendall(b"reset once" * 1024)
         assert process.wait(timeout=10) == 0
 
     print("TCP echo passed: EOF, 1 MiB half-close, reset/reconnect, 32 concurrent clients + idle client, --once drain")

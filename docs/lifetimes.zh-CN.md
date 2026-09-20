@@ -1,95 +1,112 @@
-# Operation 结果存储与执行作用域
+# Operation 与借用结果的生命周期
 
 [English](lifetimes.md) | **简体中文**
 
-普通链式 API 不变：`then(Callback, args)`、`letValue(target, args)`、`syncWait(env)`。底层 sender/receiver 协议改为引用完成值，并区分逻辑完成与允许回收。这是有意加强的生命周期约束，不等同于 P2300 允许在 value/error/stopped completion 内立即销毁 operation 的规则。
+## Completion 是销毁边界
 
-## 两个完成时刻
+每个 operation 只启动一次，并恰好调用 `setValue(*const Values)`、`setError(anyerror)`、
+`setStopped()` 之一。receiver **可以在这次通知内销毁或重建 operation**，也可以继续
+保留它。生产者必须先完成所有 operation 访问、注销取消回调、释放不再需要的资源，
+然后发出完成通知；通知之后不能再访问 operation、嵌在其中的 receiver 或其父节点。
+提前缓存指针不会延长这些对象的生命期。
 
-`setValue(*const Values)`、`setError(anyerror)`、`setStopped()` 三者恰好调用一次，发布逻辑结果。此时不能销毁、移动或重建根 connection，不能释放仍被生产者使用的环境与资源。
+`ex.connectInto(&operation, sender, receiver)`（`ex.connect` 是别名）在最终地址构造
+`ex.Connection(S, R)`，已知 child 同时原地连接。连接后不能复制或移动，尚未启动也
+不例外；地址保持稳定直到拥有者销毁或重建。工厂产生的 child 仍在输入可用时连接。
 
-`ex.connect(sender, &receiver)` 返回 `ex.Connection(SenderType)`。它内嵌原始 `SenderType.Operation` 和一个执行作用域；启动后地址保持稳定。全部执行入口退出后，根 receiver 的可选 `setFinished()` 被调用一次。此时可以回收根 connection，包括在 setFinished 内销毁它。setFinished 调用本身不属于需要保留 operation 的业务完成处理；分发器在调用之后不再访问这个 connection。
+```zig
+var operation: ex.Connection(@TypeOf(sender), @TypeOf(&receiver)) = undefined;
+ex.connectInto(&operation, sender, &receiver);
+operation.start(); // 同步完成也可能已经销毁 operation，不能再无条件读取它。
+```
 
-没有 setFinished 的手工 receiver 必须通过外部机制保证 execution 已经退出，例如在驱动 RunLoop.run() 返回之后释放 connection；仅观察 setValue 已发生不够。通常应实现 setFinished 来通知拥有者。
+不再有 `setFinished` 通知，也不再要求生产者获取/释放 `Env.scope` 执行引用。
+旧 sender 若在 completion 后继续访问自身，必须迁移；这是底层协议的破坏性变更。
+普通 fluent 组合及 `syncWait`、`spawn` 的调用方式不变。
 
-`syncWait` 使用根 connection，等待 setFinished 后才返回。成功 tuple 在返回时复制出作用域；内部 pointer/slice 仍不延长其所指对象的生命周期，不能把指向 operation 内部的借用交给 syncWait 的调用者。
+## 保留 child 就能继续借用
 
-## 结果存储
-
-成功值的实体必须位于 operation 自身、同一执行作用域中的上游 operation，或有效期明确覆盖该作用域的外部存储。发布后不可修改该实体；不能把回调局部 tuple 的地址交给 receiver。
+“允许销毁”不表示“立即销毁”。成功 tuple 必须位于 operation、自身持有的上游
+operation，或拥有者明确保活的外部存储。拥有者保留存储期间，发布的 tuple 保持
+有效且不可变；不能发布回调局部变量的地址。销毁/重建对应 operation 会使借用失效。
+空 tuple 可使用静态空存储。
 
 ```zig
 pub const Values = ex.Values(.{i64});
-pub const Operation = struct {
-    receiver: ex.Receiver(Values),
-    output: Values = undefined,
-    pub fn start(self: *@This()) void {
-        self.output = .{42};
-        self.receiver.setValue(&self.output);
-    }
-};
+pub fn Operation(comptime R: type) type {
+    return struct {
+        receiver: ex.TypedReceiver(Values, R),
+        output: Values = undefined,
+        pub fn start(self: *@This()) void {
+            self.output = .{42};
+            self.receiver.setValue(&self.output); // 最后一次 operation 访问。
+        }
+    };
+}
+pub fn connectInto(_: @This(), out: anytype, receiver: anytype) void {
+    out.* = .{ .receiver = .init(receiver) };
+}
 ```
 
-`then` 把业务函数的结果写入自己的 output 槽。`letValue` 与 `upstream()` 借用上游结果，不再复制 input 或构造保存同一 tuple 的 just sender。`continuesOn` 和 `withStopToken` 保存结果指针。`whenAll` 保存各分支结果指针，全部成功后构造一份连续的完成参数存储；callback 按独立参数接收，`syncWait` 则复制参数 tuple 作为返回值。
+`letValue`/`upstream()`、`continuesOn` 和 stop 包装继续持有 child，借用结果，无需
+为了新协议复制整份 tuple。`then` 仍把新结果写入自己的 output。多输入 `whenAll`
+保留分支及其结果指针，最后构造一份合并 tuple；单输入直接转发。只有前后阶段要
+复用同一块存储时，才必须先保存还会使用的数据；当前 let 不这样复用。
 
-`split` 是独立所有权边界：共享状态保存缓存，每个订阅 operation 保存自己的结果，避免订阅的异步后续依赖已释放的 shared owner。slice、指针仍只做浅复制，库不自动释放用户资源。
+`split` 是独立所有权边界：共享缓存和每个订阅有各自的结果存储。pointer/slice
+仍是浅复制，不自动拥有所指对象。`syncWait` 在完成时被唤醒，并在销毁本地
+operation 之前复制返回 tuple；返回的内部 pointer/slice 不能指向即将失效的存储。
 
-业务 callback 的参数类型保持原定义，普通按值 call/callTuple 仍可能发生复制；本次优化保证框架转发不必重复保存整份 payload，不承诺任意业务代码或 sender 构造阶段零复制。生产结果直接写入 output 的优化程度也取决于 Zig 后端。
+## 异步与真正的并发协调
 
-## 异步入口保护
+发布给另一线程后，completion 可能早于 `start()` 返回。source 的启动路径也必须
+保证发布后不再无保护地访问 operation。线程/后端的队列同步负责发布可见性；
+调度器应先摘下 task 再调用它，调用后不再读取 task。I/O 后端只有在内核不再借用
+buffer、取消回调已解除、目标/取消 CQE 已收齐后，才能最终通知 receiver。
 
-Env.scope 是库的执行生命周期服务。普通节点原样转发；自定义异步 sender 在发布任务之前取得一个入口，在最后一次 operation 访问之后释放它：
+不再有普遍覆盖每个异步入口的原子引用计数。`whenAll`/`whenAny` 仍以原子到达计数
+保护分支启动循环及取消 dispatch；最后一个参与者完成清理再转发。共享计算仍用
+引用计数保活。`withStopToken` 保留启动/完成/取消之间真正需要的协调。
+这些计数不能因新的销毁规则而删除。
+
+`repeat` 在完成中允许重连 child；仅下一轮执行经过共享 TLS trampoline，终态
+直接转发。重连前复制所需控制值，重连/通知后不访问旧 child。同步十万轮仍限制
+栈增长；跨轮状态由外部拥有者保存。
+
+## 关联资源的清理
+
+`Env.scope` 现在仅指向一个资源清理记录表（兼容类型名 `Scope`），没有 active
+计数、父引用、enter/leave、acquire/release 或 idle 通知。只有 `associate` 注册
+记录时需要锁；普通 I/O、调度与 repeat 不为执行入口计数。
+
+关联可以保护异步下游正在借用的资源，因此不会在关联 child 自身完成时就释放。
+根完成时先摘下所有记录，将 release action 保存到栈，再通知根 receiver，最后
+执行这些独立 action；不会在通知后读取已被销毁的 operation。`whenAny` 分支沿用
+外层清理表，repeat 在每次存储复用边界提取本轮记录。栈空间随该边界的关联数增长。
+
+`spawn` 在自身完成接收函数中释放 allocation，再释放独立的 counting-scope
+association。需要回收被关联资源的调用者仍应等待该 counting scope 的 `join()`；
+观察到 value 通知不等于外部关联已经释放。不能在持有某 counting-scope 关联的同一
+图内 join 它，否则会等待自身。
+
+## 编译期环境
+
+`ex.UnstoppableEnv` 携带零大小的 `NeverStopToken`；`ex.Env` 保留动态 stop token。
+内置 receiver/adaptor 用 `EnvOf(R)` 保留环境类型，不会统一擦除成 `Env`。
+I/O 及订阅、join 的外层取消 callback 根据类型选择，不可取消时没有 callback
+字段开销。`syncWait(.{})` 和 `spawn(..., .{ .allocator = allocator })` 自动选择
+不可取消环境；显式提供 stop token 则保留取消支持。手工 receiver 可这样声明：
 
 ```zig
-// 在向另一个线程/后端提交工作之前：
-const scope = self.receiver.getEnv().scope;
-ex.Scope.acquire(scope);
-// submit(self)，失败路径也必须发布 error 并 release(scope)。
-
-// 在对应的完成处理入口中：
-const scope = self.receiver.getEnv().scope;
-// 保存结果、注销取消回调、通知 receiver，并完成自己的收尾。
-self.receiver.setValue(&self.output);
-// 所有 operation 访问必须在 release 之前完成。
-ex.Scope.release(scope);
+pub fn getEnv(_: *@This()) ex.UnstoppableEnv { return .{}; }
 ```
 
-acquire/release 一一对应，不能在 release 后访问 operation。根 start 已有一个保护，普通同步子链不用每个节点都增加计数。调度器任务、I/O 完成、共享订阅、可能引发完成的取消处理均受保护。自定义异步生产者若不取得入口，会违反协议，Debug/ReleaseSafe 中可能在根作用域空闲时触发断言。
+`withStopToken` 和需要取消兄弟分支的组合仍提供可取消环境。`readEnv()` 为保持
+其静态 `Values` API，返回动态 `Env` 快照；显式使用旧 erased Receiver 也属于
+环境类型擦除边界。自定义转发 receiver 应使用 `ex.EnvOf(R)` 作为 getEnv 返回类型，
+若有意返回动态 Env，则显式调用 `.toDynamic()`。
 
-结果、完成状态等写入通过 scope 的 acquire/release 同步，在最后一个入口退出后对 setFinished 可见。scope 本身不分配内存；异步入口使用原子计数，因此存在额外同步成本，不宣称所有负载一定更快。
-
-每次 ex.connect 创建独立根；已有 Env.scope 不会把另一个根隐式变成其拥有者。低层 sender.connect(Receiver) 返回原始 S.Operation，供组合算法使用；手工调用者需自行提供作用域并遵守上述存储规则。
-
-## 循环与复用
-
-repeatEffect 为每一轮提供子作用域，父作用域保持整个循环有效。该轮已经逻辑完成且所有执行入口退出之后才允许下一次 connect/start 覆盖原有 operation 存储。同步十万轮仍由 trampoline 驱动，异步轮次也不递归增长调用栈。跨轮需要的状态应放在循环之外，显式传指针。
-
-## 验证
-
-`tests/lifetime.zig` 覆盖 64 KiB payload 经嵌套 upstream/letValue、调度、取消包装后的地址一致性与 operation 大小；then 结果位于 operation 内；生产者在 setValue 返回后继续使用 operation 时 setFinished/syncWait 必须等待；repeat 不能提前覆盖旧一轮；shared owner 提前释放不影响已调度的订阅结果。
-
-`tests/codegen/receiver_forward.zig` 用真实 Receiver 的函数指针边界检查优化 IR：
-
-```sh
-zig build-obj -O ReleaseSafe --dep zigexec \
-  -Mroot=tests/codegen/receiver_forward.zig -Mzigexec=src/root.zig \
-  -fno-emit-bin -femit-llvm-ir=/tmp/zigexec-receiver-forward.ll
-```
-
-在当前 0.17 master / x86_64 LLVM 后端中，64 KiB tuple 通过指针直接转发，forward 函数没有 payload memcpy 或临时数组分配。该检查不代表整张执行图的性能基准。
-
-同一份 `tests/codegen/operation_layout.zig` 对比优化前版本与当前版本，64 KiB `just` 经嵌套 letValue/upstream、continuesOn 和 withStopToken 后，原始组合 operation 的大小从 **721,592 字节降到 197,544 字节**，减少约 72.6%。此数字是 x86_64 上的类型布局，不是吞吐量结果，也不包含根 Connection 的包装。仍保留 sender 描述副本；本次没有消除构造/连接阶段所有复制。
-
-```sh
-zig run -O ReleaseSafe --dep zigexec \
-  -Mroot=tests/codegen/operation_layout.zig -Mzigexec=src/root.zig
-```
-
-
-## 关联与分支退休
-
-`associate` 把释放动作挂到当前执行 scope。退休时先提取动作，允许 `setFinished`
-释放 operation 记录后，再释放 counting scope 关联。`whenAny` 独立观察每个分支执行
-退出，但把关联记录转交外层 scope，保证异步下游仍可安全借用结果。
-`repeatEffect` 按每轮的存储复用边界处理。详见 [scope 关联](counting_scopes.zh-CN.md)
-与 [并发结果](combinators.zh-CN.md)。
+测试覆盖 completion 内释放整个 receiver/connection、另一个线程在 start 返回前
+完成、同步/异步 repeat、64 KiB 借用地址不变、关联跨异步下游保活、取消竞争和
+io_uring 地址复用。主要文件为 `tests/completion_protocol.zig`、`tests/lifetime.zig`、
+`tests/associate.zig`、`tests/repeat.zig`、`tests/io_uring.zig`。

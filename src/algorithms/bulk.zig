@@ -11,42 +11,43 @@ pub fn Bulk(comptime S: type, comptime F: type) type {
         pub const Values = S.Values;
         pub const can_error = traits.canError(S) or traits.fallible(c.CheckedResult(F, Args, "bulk"));
         const Self = @This();
-        pub const Operation = struct {
-            sender: S,
-            count: usize,
-            callback: F,
-            receiver: c.Receiver(Values),
-            child: S.Operation = undefined,
-            started: bool = false,
-            const Op = @This();
-            pub fn start(self: *Op) void {
-                std.debug.assert(!self.started);
-                self.started = true;
-                self.child = self.sender.connect(c.Receiver(Values).init(self));
-                self.child.start();
-            }
-            pub fn getEnv(self: *Op) c.Env {
-                return self.receiver.env;
-            }
-            pub fn setValue(self: *Op, values: *const Values) void {
-                for (0..self.count) |i| {
-                    if (self.receiver.env.stop_token.stopRequested()) return self.receiver.setStopped();
-                    const result = c.invokeStored(&self.callback, .{i} ++ values.*);
-                    if (comptime @typeInfo(@TypeOf(result)) == .error_union) {
-                        result catch |err| return self.receiver.setError(err);
-                    }
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                count: usize,
+                callback: F,
+                receiver: c.TypedReceiver(Values, R),
+                child: c.OperationOf(S, *Op) = undefined,
+                started: bool = false,
+                const Op = @This();
+                pub fn start(self: *Op) void {
+                    std.debug.assert(!self.started);
+                    self.started = true;
+                    self.child.start();
                 }
-                self.receiver.setValue(values);
-            }
-            pub fn setError(self: *Op, err: anyerror) void {
-                self.receiver.setError(err);
-            }
-            pub fn setStopped(self: *Op) void {
-                self.receiver.setStopped();
-            }
-        };
-        pub fn connect(self: Self, receiver: c.Receiver(Values)) Operation {
-            return .{ .sender = self.sender, .count = self.count, .callback = self.callback, .receiver = receiver };
+                pub fn getEnv(self: *Op) c.EnvOf(R) {
+                    return self.receiver.getEnv();
+                }
+                pub fn setValue(self: *Op, values: *const Values) void {
+                    for (0..self.count) |i| {
+                        if (self.receiver.getEnv().stop_token.stopRequested()) return self.receiver.setStopped();
+                        const result = c.invokeStored(&self.callback, .{i} ++ values.*);
+                        if (comptime @typeInfo(@TypeOf(result)) == .error_union) {
+                            result catch |err| return self.receiver.setError(err);
+                        }
+                    }
+                    self.receiver.setValue(values);
+                }
+                pub fn setError(self: *Op, err: anyerror) void {
+                    self.receiver.setError(err);
+                }
+                pub fn setStopped(self: *Op) void {
+                    self.receiver.setStopped();
+                }
+            };
+        }
+        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
+            out.* = .{ .count = self.count, .callback = self.callback, .receiver = .init(receiver) };
+            c.connectChild(&out.child, self.sender, out);
         }
     };
 }

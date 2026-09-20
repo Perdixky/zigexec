@@ -1,4 +1,7 @@
 test {
+    _ = @import("completion_protocol.zig");
+    _ = @import("trampoline.zig");
+    _ = @import("construction.zig");
     _ = @import("associate.zig");
     _ = @import("when_any.zig");
     _ = @import("counting_scope.zig");

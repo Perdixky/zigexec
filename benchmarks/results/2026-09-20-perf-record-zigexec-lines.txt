@@ -1,0 +1,26 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles'
+# Event count (approx.): 75569447432
+#
+# Overhead  Source:Line         
+# ........  ....................
+#
+     1.18%  context.zig:218
+     0.82%  scope.zig:51
+     0.73%  sync.zig:34
+     0.64%  sync.zig:27
+     0.51%  scope.zig:62
+     0.47%  repeat_effect.zig:41
+     0.25%  atomic.zig:0
+     0.20%  sender.zig:29
+     0.15%  context.zig:180
+     0.12%  repeat_effect.zig:0
+
+
+#
+# (Tip: To measure approximate function latency with Processor Trace use perf record -e intel_pt// ... ; perf script --call-ret-trace)
+#

@@ -1,0 +1,96 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles:u'
+# Event count (approx.): 3097046312
+#
+# Overhead  Source:Line        
+# ........  ...................
+#
+    22.80%  scope.zig:51
+    14.09%  trampoline.zig:53
+     8.12%  scope.zig:62
+     4.76%  sender.zig:29
+     3.33%  repeat.zig:50
+     3.23%  repeat.zig:48
+     2.98%  context.zig:216
+     2.88%  repeat.zig:78
+     2.70%  context.zig:202
+     2.20%  scope.zig:39
+     2.17%  scope.zig:49
+     1.85%  scope.zig:46
+     1.67%  tcp_echo.zig:30
+     1.52%  scope.zig:64
+     1.47%  trampoline.zig:43
+     1.40%  context.zig:0
+     1.38%  send_all.zig:37
+     1.35%  trampoline.zig:46
+     1.26%  submission.zig:0
+     1.12%  context.zig:90
+     1.05%  repeat.zig:46
+     0.91%  sender.zig:63
+     0.91%  submission.zig:21
+     0.89%  context.zig:272
+     0.85%  submission.zig:20
+     0.84%  submission.zig:17
+     0.67%  ??:0
+     0.64%  repeat.zig:43
+     0.56%  IoUring.zig:228
+     0.51%  context.zig:201
+     0.50%  scope.zig:58
+     0.49%  context.zig:284
+     0.48%  context.zig:88
+     0.44%  repeat.zig:0
+     0.40%  send_all.zig:28
+     0.39%  context.zig:282
+     0.38%  IoUring.zig:145
+     0.34%  context.zig:214
+     0.31%  trampoline.zig:56
+     0.27%  context.zig:95
+     0.26%  context.zig:285
+     0.25%  IoUring.zig:144
+     0.24%  scope.zig:50
+     0.24%  submission.zig:23
+     0.24%  scope.zig:59
+     0.23%  context.zig:305
+     0.23%  trampoline.zig:44
+     0.23%  trampoline.zig:55
+     0.23%  context.zig:203
+     0.20%  scope.zig:68
+     0.18%  context.zig:213
+     0.17%  context.zig:283
+     0.15%  context.zig:281
+     0.13%  IoUring.zig:230
+     0.13%  repeat.zig:86
+     0.13%  sender.zig:43
+     0.12%  submission.zig:27
+     0.12%  sender.zig:32
+     0.11%  sender.zig:44
+     0.09%  IoUring.zig:146
+     0.09%  repeat.zig:93
+     0.08%  context.zig:287
+     0.08%  sender.zig:41
+     0.08%  IoUring.zig:143
+     0.08%  transform.zig:49
+     0.08%  callback.zig:0
+     0.08%  trampoline.zig:24
+     0.08%  context.zig:309
+     0.07%  receiver.zig:114
+     0.07%  context.zig:94
+     0.07%  callback.zig:23
+     0.07%  atomic.zig:57
+     0.07%  IoUring.zig:227
+     0.07%  scope.zig:72
+     0.05%  context.zig:310
+     0.05%  repeat.zig:69
+     0.05%  context.zig:89
+     0.05%  transform.zig:63
+     0.05%  io_uring_sqe.zig:69
+     0.05%  IoUring.zig:229
+
+
+#
+# (Tip: To show information about system the samples were collected on use perf report --header)
+#

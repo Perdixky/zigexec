@@ -17,3 +17,13 @@ pub const Payload = callable.Payload;
 pub const ReturnedValues = callable.ReturnedValues;
 pub const resultValues = callable.resultValues;
 pub const RuntimeTuple = @import("../detail/tuple.zig").RuntimeTuple;
+
+pub const TypedReceiver = @import("receiver.zig").TypedReceiver;
+pub const OperationOf = @import("receiver.zig").OperationOf;
+pub const connectChild = @import("receiver.zig").connectChild;
+pub const connectInto = @import("connect.zig").connectInto;
+
+pub const EnvOf = @import("receiver.zig").EnvOf;
+pub const StopCallbackFor = @import("receiver.zig").StopCallbackFor;
+pub const UnstoppableEnv = @import("environment.zig").UnstoppableEnv;
+pub const NeverStopToken = @import("environment.zig").NeverStopToken;

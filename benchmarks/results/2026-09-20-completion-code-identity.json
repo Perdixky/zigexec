@@ -1,0 +1,28 @@
+{
+  "command": [
+    "/usr/bin/zig",
+    "build-exe",
+    "-fllvm",
+    "--dep",
+    "zigexec",
+    "-O",
+    "ReleaseFast",
+    "-mcpu=native",
+    "-Mroot=examples/tcp_echo.zig",
+    "-O",
+    "ReleaseFast",
+    "-mcpu=native",
+    "-Mzigexec=src/root.zig",
+    "-femit-bin=.bench-cache/completion-final-echo"
+  ],
+  "binaries": {
+    "zigexec-echo": {
+      "binary_sha256": "7f0d23c1b13d641fa7a4723efb158e9db9309bdc6242af1b960d2eeaeca290e6",
+      "text_sha256": "c6940533e39edc4884f59d480e9dd1fa3c21b8fed83148d40bbb4a4959241846"
+    },
+    "completion-final-echo": {
+      "binary_sha256": "7f0d23c1b13d641fa7a4723efb158e9db9309bdc6242af1b960d2eeaeca290e6",
+      "text_sha256": "c6940533e39edc4884f59d480e9dd1fa3c21b8fed83148d40bbb4a4959241846"
+    }
+  }
+}

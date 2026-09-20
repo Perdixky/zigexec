@@ -1,0 +1,116 @@
+# Existing manual echo profile: selected disassembly
+# sudo -n perf annotate --stdio --no-source --percent-type global-period
+#   -i .bench-cache/perf-stdexec-manual-user/zigexec-c256-record-0/perf.data
+# Branch/call symbol names shortened for readability; addresses and percentages retained.
+# cycles:u sampling is not precise instruction latency attribution.
+
+
+FUNCTION execution.scope.Scope.enter
+ Percent |	Source code & Disassembly of zigexec-echo for cycles:u (1881 samples, percent: global period)
+-------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3       Disassembly of section .text:
+         :
+         : 5       000000000107dfa0 <symbol>:
+    0.03 :   107dfa0:        push   %rbp
+    0.01 :   107dfa1:        mov    %rsp,%rbp
+    1.94 :   107dfa4:        push   %rbx
+    0.01 :   107dfa5:        push   %rax
+    0.18 :   107dfa6:        mov    %rdi,%rbx
+    0.03 :   107dfa9:        mov    (%rdi),%rdi
+    0.22 :   107dfac:        test   %rdi,%rdi
+    0.00 :   107dfaf:        je     107dfb6 <symbol>
+    0.00 :   107dfb1:        call   107dfa0 <symbol>
+    0.00 :   107dfb6:        lock incq 0x18(%rbx)
+   22.59 :   107dfbb:        add    $0x8,%rsp
+    0.22 :   107dfbf:        pop    %rbx
+    0.00 :   107dfc0:        pop    %rbp
+    0.00 :   107dfc1:        ret
+
+
+FUNCTION schedulers.trampoline.TrampolineScheduler.submit
+ Percent |	Source code & Disassembly of zigexec-echo for cycles:u (1329 samples, percent: global period)
+-------------------------------------------------------------------------------------------------------------
+         :
+         :
+         :
+         : 3       Disassembly of section .text:
+         :
+         : 5       000000000107cd50 <symbol>:
+    0.03 :   107cd50:        push   %rbp
+    0.08 :   107cd51:        mov    %rsp,%rbp
+    0.03 :   107cd54:        push   %rbx
+    0.00 :   107cd55:        sub    $0x48,%rsp
+    0.19 :   107cd59:        mov    %fs:0xfffffffffffbfff8,%rbx
+    1.33 :   107cd62:        mov    %rdi,-0x10(%rbp)
+    0.03 :   107cd66:        test   %rbx,%rbx
+    0.01 :   107cd69:        je     107cdc0 <symbol>
+    0.00 :   107cd6b:        mov    0x18(%rbx),%rax
+    0.01 :   107cd6f:        cmp    (%rbx),%rax
+    0.00 :   107cd72:        jae    107cda4 <symbol>
+    0.00 :   107cd74:        mov    0x10(%rbx),%rcx
+    0.00 :   107cd78:        lea    -0x10(%rbp),%rdx
+    0.01 :   107cd7c:        mov    %rdx,%rsi
+    0.27 :   107cd7f:        sub    %rcx,%rsi
+    1.07 :   107cd82:        sub    %rdx,%rcx
+    0.00 :   107cd85:        cmovb  %rsi,%rcx
+    0.00 :   107cd89:        cmp    0x8(%rbx),%rcx
+    0.01 :   107cd8d:        jae    107cda4 <symbol>
+    0.00 :   107cd8f:        inc    %rax
+    0.01 :   107cd92:        mov    %rax,0x18(%rbx)
+    0.01 :   107cd96:        call   *0x8(%rdi)
+    0.00 :   107cd99:        decq   0x18(%rbx)
+    0.16 :   107cd9d:        add    $0x48,%rsp
+    0.00 :   107cda1:        pop    %rbx
+    0.03 :   107cda2:        pop    %rbp
+    0.01 :   107cda3:        ret
+    0.00 :   107cda4:        movq   $0x0,(%rdi)
+    0.00 :   107cdab:        mov    0x28(%rbx),%rax
+    0.00 :   107cdaf:        test   %rax,%rax
+    0.00 :   107cdb2:        je     107ce61 <symbol>
+    0.00 :   107cdb8:        mov    %rdi,(%rax)
+    0.00 :   107cdbb:        jmp    107ce65 <symbol>
+    0.00 :   107cdc0:        vmovups -0x66858(%rip),%xmm0        # 1016570 <symbol>
+   13.90 :   107cdc8:        lea    -0x50(%rbp),%rcx
+    0.00 :   107cdcc:        lea    -0x10(%rbp),%rax
+    0.03 :   107cdd0:        mov    %rcx,%fs:0xfffffffffffbfff8
+    0.00 :   107cdd9:        vmovaps %xmm0,-0x50(%rbp)
+    0.09 :   107cdde:        mov    %rax,-0x40(%rbp)
+    0.05 :   107cde2:        movq   $0x1,-0x38(%rbp)
+    0.04 :   107cdea:        vxorps %xmm0,%xmm0,%xmm0
+    0.00 :   107cdee:        vmovaps %xmm0,-0x30(%rbp)
+    0.31 :   107cdf3:        call   *0x8(%rdi)
+    0.00 :   107cdf6:        mov    -0x30(%rbp),%rdi
+    0.08 :   107cdfa:        test   %rdi,%rdi
+    0.00 :   107cdfd:        je     107ce4d <symbol>
+    0.00 :   107cdff:        lea    -0x18(%rbp),%rbx
+    0.00 :   107ce03:        jmp    107ce33 <symbol>
+    0.00 :   107ce05:        data16 cs nopw 0x0(%rax,%rax,1)
+    0.00 :   107ce10:        movq   $0x0,(%rdi)
+    0.00 :   107ce17:        movq   $0x1,-0x38(%rbp)
+    0.00 :   107ce1f:        mov    %rbx,-0x40(%rbp)
+    0.00 :   107ce23:        mov    -0x18(%rbp),%rax
+    0.00 :   107ce27:        call   *0x8(%rax)
+    0.00 :   107ce2a:        mov    -0x30(%rbp),%rdi
+    0.00 :   107ce2e:        test   %rdi,%rdi
+    0.00 :   107ce31:        je     107ce4d <symbol>
+    0.00 :   107ce33:        mov    %rdi,-0x18(%rbp)
+    0.00 :   107ce37:        mov    (%rdi),%rax
+    0.00 :   107ce3a:        mov    %rax,-0x30(%rbp)
+    0.00 :   107ce3e:        test   %rax,%rax
+    0.00 :   107ce41:        jne    107ce10 <symbol>
+    0.00 :   107ce43:        movq   $0x0,-0x28(%rbp)
+    0.00 :   107ce4b:        jmp    107ce10 <symbol>
+    0.00 :   107ce4d:        movq   $0x0,%fs:0xfffffffffffbfff8
+    0.00 :   107ce5a:        add    $0x48,%rsp
+    0.01 :   107ce5e:        pop    %rbx
+    0.00 :   107ce5f:        pop    %rbp
+    0.01 :   107ce60:        ret
+    0.00 :   107ce61:        mov    %rdi,0x20(%rbx)
+    0.00 :   107ce65:        mov    %rdi,0x28(%rbx)
+    0.00 :   107ce69:        add    $0x48,%rsp
+    0.00 :   107ce6d:        pop    %rbx
+    0.00 :   107ce6e:        pop    %rbp
+    0.00 :   107ce6f:        ret

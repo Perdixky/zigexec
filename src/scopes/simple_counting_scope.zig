@@ -13,7 +13,7 @@ count: usize = 0,
 // Cancellation dispatch must finish before its stop source can be destroyed.
 // These internal guards do not create user-visible scope associations.
 dispatches: usize = 0,
-waiters: ?*JoinImpl.Operation = null,
+waiters: ?*Waiter = null,
 
 pub fn deinit(self: *Self) void {
     self.mutex.lock();
@@ -95,7 +95,7 @@ fn release(self: *Self) void {
     self.mutex.unlock();
     notify(waiters); // May destroy self. No further scope access.
 }
-fn detachReadyLocked(self: *Self) ?*JoinImpl.Operation {
+fn detachReadyLocked(self: *Self) ?*Waiter {
     if (self.count != 0 or self.dispatches != 0) return null;
     if (self.state != .open_and_joining and self.state != .closed_and_joining) return null;
     self.state = .joined;
@@ -103,11 +103,11 @@ fn detachReadyLocked(self: *Self) ?*JoinImpl.Operation {
     self.waiters = null;
     return waiters;
 }
-fn notify(head: ?*JoinImpl.Operation) void {
+fn notify(head: ?*Waiter) void {
     var next = head;
     while (next) |waiter| {
         next = waiter.next;
-        waiter.scheduleCompletion();
+        waiter.notify(waiter);
     }
 }
 // Internal hooks for CountingScope, not association acquisition.
@@ -125,6 +125,10 @@ pub fn endDispatch(self: *Self) void {
     notify(waiters);
 }
 
+const Waiter = struct {
+    next: ?*Waiter = null,
+    notify: *const fn (*Waiter) void,
+};
 pub const Join = ex.Sender(JoinImpl);
 pub fn join(self: *Self) Join {
     return ex.asSender(JoinImpl{ .scope = self });
@@ -134,48 +138,50 @@ const JoinImpl = struct {
     pub const Values = Empty;
     // Scheduling completion may report scheduler error/stopped, never task errors.
     pub const can_error = true;
-    pub const Operation = struct {
-        scope: *Self,
-        receiver: ex.Receiver(Empty),
-        next: ?*@This() = null,
-        transfer: ex.Schedule(ex.StartScheduler).Operation = undefined,
-        scheduler_error: ?anyerror = null,
-        output: Empty = .{},
-        pub fn start(self: *@This()) void {
-            if (self.receiver.env.getStartScheduler()) |scheduler| {
-                self.transfer = ex.schedule(scheduler).connect(self.receiver);
-            } else |err| {
-                // A runtime Env cannot reject connect at compile time. Still
-                // drain associations before reporting an invalid environment.
-                self.scheduler_error = err;
+    pub fn Operation(comptime R: type) type {
+        return struct {
+            scope: *Self,
+            receiver: ex.TypedReceiver(Empty, R),
+            waiter: Waiter = .{ .notify = notifyReady },
+            transfer: ex.meta.OperationOf(ex.Schedule(ex.StartScheduler), ex.TypedReceiver(Empty, R)) = undefined,
+            scheduler_error: ?anyerror = null,
+            output: Empty = .{},
+            pub fn start(self: *@This()) void {
+                const scope = self.scope;
+                scope.mutex.lock();
+                if (scope.count == 0 and scope.dispatches == 0) {
+                    scope.state = .joined;
+                    scope.mutex.unlock();
+                    const receiver = self.receiver;
+                    if (self.scheduler_error) |err| receiver.setError(err) else receiver.setValue(&self.output);
+                } else {
+                    scope.state = switch (scope.state) {
+                        .unused, .open, .open_and_joining => .open_and_joining,
+                        .unused_and_closed, .closed, .closed_and_joining => .closed_and_joining,
+                        .joined => .closed_and_joining, // Internal dispatch guard only.
+                    };
+                    self.waiter.next = scope.waiters;
+                    scope.waiters = &self.waiter;
+                    scope.mutex.unlock();
+                }
             }
-            ex.Scope.acquire(self.receiver.env.scope);
-            const scope = self.scope;
-            scope.mutex.lock();
-            if (scope.count == 0 and scope.dispatches == 0) {
-                scope.state = .joined;
-                scope.mutex.unlock();
-                const receiver = self.receiver;
-                if (self.scheduler_error) |err| receiver.setError(err) else receiver.setValue(&self.output);
-                ex.Scope.release(receiver.env.scope);
-            } else {
-                scope.state = switch (scope.state) {
-                    .unused, .open, .open_and_joining => .open_and_joining,
-                    .unused_and_closed, .closed, .closed_and_joining => .closed_and_joining,
-                    .joined => .closed_and_joining, // Internal dispatch guard only.
-                };
-                self.next = scope.waiters;
-                scope.waiters = self;
-                scope.mutex.unlock();
+            fn notifyReady(waiter: *Waiter) void {
+                const self: *@This() = @fieldParentPtr("waiter", waiter);
+                self.scheduleCompletion();
             }
+            fn scheduleCompletion(self: *@This()) void {
+                if (self.scheduler_error) |err| self.receiver.setError(err) else self.transfer.start();
+            }
+        };
+    }
+    pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+        out.* = .{ .scope = self.scope, .receiver = .init(receiver) };
+        if (out.receiver.getEnv().getStartScheduler()) |scheduler| {
+            ex.schedule(scheduler).connectInto(&out.transfer, out.receiver);
+        } else |err| {
+            // A runtime Env cannot reject connect at compile time. Still
+            // drain associations before reporting an invalid environment.
+            out.scheduler_error = err;
         }
-        fn scheduleCompletion(self: *@This()) void {
-            const lifetime = self.receiver.env.scope;
-            if (self.scheduler_error) |err| self.receiver.setError(err) else self.transfer.start();
-            ex.Scope.release(lifetime);
-        }
-    };
-    pub fn connect(self: @This(), receiver: ex.Receiver(Empty)) Operation {
-        return .{ .scope = self.scope, .receiver = receiver };
     }
 };

@@ -36,6 +36,27 @@ Integration tests use the real kernel. They do not substitute mocks or
 silently skip tests when io_uring is unavailable. Tests live in `tests/` and
 are not compiled into the library module.
 
+## Benchmarks
+
+See [`benchmarks/`](benchmarks/README.md) for reproducible Linux TCP echo comparisons
+with libxev and zio, including pinned dependencies, native load generation,
+throughput, RTT, CPU usage, and raw measurements. These results describe the tested
+TCP workloads, not a general ranking of asynchronous libraries.
+
+The [final performance report (Chinese)](benchmarks/PERFORMANCE.zh-CN.md) consolidates
+the optimized implementation's six-scenario comparison, perf counters, and memory layout.
+
+![TCP echo throughput comparison across six workloads](benchmarks/results/2026-09-20-final-throughput.svg)
+
+![User-space CPU cost at 64-byte messages and 256 connections](benchmarks/results/2026-09-20-final-user-cost.svg)
+
+Bars show medians and dots show every trial. On the tested Ryzen 5 7500F Linux
+loopback setup, zigexec is within -1.9% to +2.0% of libxev throughput across the
+six workloads and leads zio in five of six. The completion-protocol revision
+reduces zigexec user-space cycles per echo by 24.8% and instructions by 33.8%.
+These measurements apply only to the documented single-server-core TCP setup;
+see the final report for methodology, latency, ranges, and limitations.
+
 ## Composable pipelines
 
 ```zig
@@ -131,11 +152,11 @@ sender. Zig still requires declared return types at function boundaries.
 | Synchronous recovery | `.uponError(Callback, args)`, `.uponStopped(Callback, args)` |
 | Asynchronous factories/recovery | `.letValue(Factory, args)`, `.letError(Factory, args)`, `.letStopped(Factory, args)` |
 | Sub-pipelines/sequencing | `.letValue(body, .{})`, `.letValue(child, .{})` |
-| Repetition | `.repeatEffect()`, `.repeatEffectUntil()` |
+| Repetition | `.repeat()`, `.repeatUntil()` |
 | Concurrent results | `whenAll(.{a, b, ...})` → concatenated arguments, `whenAny(.{ .a = a, .b = b })` → union |
 | Scope association | `.associate(token)` → owner with `.sender()`, `.takeSender()`, `.deinit()` |
 | Indexed execution | `.bulk(count, Callback, args)` |
-| Execution contexts | `ThreadPool`, `RunLoop`, `InlineScheduler`, `IoUring` |
+| Execution contexts | `ThreadPool`, `RunLoop`, `InlineScheduler`, `TrampolineScheduler`, `IoUring` |
 | Scheduling | `scheduler.schedule()`, `.startsOn(scheduler)`, `.continuesOn(scheduler)` |
 | Cancellation | `StopSource`, `StopToken`, `StopCallback`, `.withStopToken(token)` |
 | Shared computation | `.split(allocator)`, then owner `.sender()`, `.clone()`, `.deinit()`, `.requestStop()` |
@@ -235,13 +256,14 @@ zig build run-echo -- 9000
 nc 127.0.0.1 9000
 ```
 
-The example has one accept loop. Each accepted socket immediately spawns an
-independent `recv`/`sendAll`/`repeatEffect` child using the same io_uring scheduler.
-`CountingScope` tracks child associations; `ex.spawn` reclaims each operation after `setFinished`;
-each child has its own 16 KiB buffer. `ex.runInScope(&scope, accept_loop)` drains the children
-before the single final `syncWait` returns. `--once` accepts one client and waits
-for its echo task to finish. Callbacks do not block; `MSG_NOSIGNAL` prevents
-`SIGPIPE` from terminating the server.
+The accept callback allocates, connects, and directly starts each client's
+`recv → sendAll → repeat` operation on the reactor. A Client owns its 16 KiB
+buffer and Connection; a reactor-owned intrusive list tracks clients. Its
+Completion unlinks the node, closes the socket, and frees storage. This
+single-reactor example needs no spawn, CountingScope, or per-client stop source.
+`--once` waits for the client to retire; accept failure shuts down the context
+and drains actual I/O completions. Main waits only for final drain notification.
+Callbacks do not block; `MSG_NOSIGNAL` prevents SIGPIPE.
 
 `zig build test-echo` checks 32 simultaneous clients plus an idle client, binary
 and fragmented transfers, half-close, reset/reconnect, and `--once` draining.
@@ -271,7 +293,7 @@ exe.root_module.addImport("zigexec", dep.module("zigexec"));
 The project is not a complete C++26 implementation. Each sender has one static
 success tuple, errors use `anyerror`, and `on` environment restoration,
 full P3149 async-scope APIs (including `spawnFuture`), GPU integration, coroutine integration, additional
-platform backends, and comprehensive benchmarks are not yet provided.
+platform backends, and benchmarks beyond TCP echo are not yet provided.
 
 ## Operation lifetimes
 
@@ -281,12 +303,23 @@ copies. Callback arguments retain their declared types; owned result boundaries
 such as `syncWait` and `split` still copy values when needed.
 
 For custom senders/receivers, `setValue` now takes `*const Values`.
-`ex.connect` returns `ex.Connection(S)`, which owns the raw `S.Operation` and an
-execution scope. Retire the connection in `setFinished`, after execution entries
-have exited, never in `setValue`/`setError`/`setStopped`. Custom asynchronous
-senders acquire `Env.scope` before publishing work and release it after their
-last operation access. `syncWait` waits for this retirement boundary, and repeat
-algorithms wait before reusing child storage. See [the lifetime protocol](docs/lifetimes.md).
+`ex.connectInto(&operation, sender, receiver)` constructs `ex.Connection(S, R)`
+in its final storage, with a concrete child operation. Keep connected storage
+immovable, including before start. Any completion may destroy the connection;
+producers must perform their final operation access before signaling it. Owners
+may retain children to keep borrowed results alive. There is no second completion
+notification or generic execution reference count. Typed `UnstoppableEnv` removes
+unused cancellation storage. See [the lifetime protocol](docs/lifetimes.md).
+
+### Manual connection storage
+
+```zig
+var operation: ex.Connection(@TypeOf(sender), @TypeOf(&receiver)) = undefined;
+ex.connectInto(&operation, sender, &receiver);
+operation.start();
+```
+
+`Operation(R)` retains the concrete receiver type. Connection constructs known children at their final addresses; do not copy or move connected storage, and reclaim it during completion or retain it for borrowing. The old two-argument value-returning `connect` is replaced by three-argument in-place construction. Fluent composition, `syncWait`, and `spawn` usage is unchanged. See [lifetimes](docs/lifetimes.md).
 
 ## Documentation
 
@@ -307,3 +340,6 @@ The complete bilingual design notes cover:
 ## License
 
 This project is licensed under the [Mozilla Public License 2.0](LICENSE).
+
+See the [stdexec-inspired optimization report](benchmarks/STDEXEC.zh-CN.md) for
+trampoline/repeat, batched io_uring, manually owned echo operations, and measurements.

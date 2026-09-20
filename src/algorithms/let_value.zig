@@ -8,7 +8,7 @@ pub const Kind = enum { factory, body };
 pub fn kind(comptime T: type) Kind {
     if (@typeInfo(T) == .@"struct") {
         if (@hasDecl(T, "__zigexec_expression") or
-            (@hasDecl(T, "Values") and @hasDecl(T, "Operation") and @hasDecl(T, "connect"))) return .body;
+            (@hasDecl(T, "Values") and @hasDecl(T, "Operation") and (@hasDecl(T, "connectInto") or @hasDecl(T, "connect")))) return .body;
         if (@hasDecl(T, "call") or @hasDecl(T, "callTuple")) return .factory;
     }
     @compileError("zigexec.letValue: expected a sender factory type, a sender value, or an upstream() subchain");

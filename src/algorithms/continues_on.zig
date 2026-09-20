@@ -10,61 +10,56 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
         pub const Values = S.Values;
         pub const can_error = traits.canError(S) or traits.canError(ScheduledSender);
         const Self = @This();
-        pub const Operation = struct {
-            sender: S,
-            scheduler: Scheduler,
-            receiver: c.Receiver(Values),
-            child: S.Operation = undefined,
-            transfer: ScheduledSender.Operation = undefined,
-            result: c.CompletionRef(Values) = undefined,
-            started: bool = false,
-            const Op = @This();
-            const TransferReceiver = struct {
-                fn value(ctx: *anyopaque, _: *const ScheduledSender.Values) void {
-                    const op: *Op = @ptrCast(@alignCast(ctx));
-                    op.receiver.completeRef(op.result);
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                receiver: c.TypedReceiver(Values, R),
+                child: c.OperationOf(S, *Op) = undefined,
+                transfer: c.OperationOf(ScheduledSender, TransferReceiver) = undefined,
+                result: c.CompletionRef(Values) = undefined,
+                started: bool = false,
+                const Op = @This();
+                const TransferReceiver = struct {
+                    op: *Op,
+                    pub fn getEnv(self: @This()) c.EnvOf(R) {
+                        return self.op.receiver.getEnv();
+                    }
+                    pub fn setValue(self: @This(), _: *const ScheduledSender.Values) void {
+                        self.op.receiver.completeRef(self.op.result);
+                    }
+                    pub fn setError(self: @This(), e: anyerror) void {
+                        self.op.receiver.setError(e);
+                    }
+                    pub fn setStopped(self: @This()) void {
+                        self.op.receiver.setStopped();
+                    }
+                };
+                pub fn start(self: *Op) void {
+                    std.debug.assert(!self.started);
+                    self.started = true;
+                    self.child.start();
                 }
-                fn err(ctx: *anyopaque, e: anyerror) void {
-                    const op: *Op = @ptrCast(@alignCast(ctx));
-                    op.receiver.setError(e);
+                pub fn getEnv(self: *Op) c.EnvOf(R) {
+                    return self.receiver.getEnv();
                 }
-                fn stopped(ctx: *anyopaque) void {
-                    const op: *Op = @ptrCast(@alignCast(ctx));
-                    op.receiver.setStopped();
+                fn forward(self: *Op, result: c.CompletionRef(Values)) void {
+                    self.result = result;
+                    self.transfer.start();
+                }
+                pub fn setValue(self: *Op, values: *const Values) void {
+                    self.forward(.{ .value = values });
+                }
+                pub fn setError(self: *Op, err: anyerror) void {
+                    self.forward(.{ .err = err });
+                }
+                pub fn setStopped(self: *Op) void {
+                    self.forward(.stopped);
                 }
             };
-            pub fn start(self: *Op) void {
-                std.debug.assert(!self.started);
-                self.started = true;
-                self.child = self.sender.connect(c.Receiver(Values).init(self));
-                self.child.start();
-            }
-            pub fn getEnv(self: *Op) c.Env {
-                return self.receiver.env;
-            }
-            fn forward(self: *Op, result: c.CompletionRef(Values)) void {
-                self.result = result;
-                self.transfer = schedule(self.scheduler).connect(.{
-                    .context = self,
-                    .value_fn = TransferReceiver.value,
-                    .error_fn = TransferReceiver.err,
-                    .stopped_fn = TransferReceiver.stopped,
-                    .env = self.receiver.env,
-                });
-                self.transfer.start();
-            }
-            pub fn setValue(self: *Op, values: *const Values) void {
-                self.forward(.{ .value = values });
-            }
-            pub fn setError(self: *Op, err: anyerror) void {
-                self.forward(.{ .err = err });
-            }
-            pub fn setStopped(self: *Op) void {
-                self.forward(.stopped);
-            }
-        };
-        pub fn connect(self: Self, receiver: c.Receiver(Values)) Operation {
-            return .{ .sender = self.sender, .scheduler = self.scheduler, .receiver = receiver };
+        }
+        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
+            out.* = .{ .receiver = .init(receiver) };
+            c.connectChild(&out.child, self.sender, out);
+            c.connectChild(&out.transfer, schedule(self.scheduler), Operation(@TypeOf(receiver)).TransferReceiver{ .op = out });
         }
     };
 }

@@ -1,163 +1,128 @@
-# Operation Result Storage and Execution Scopes
+# Operation and borrowed-result lifetimes
 
 **English** | [简体中文](lifetimes.zh-CN.md)
 
-The fluent API remains unchanged: `then(Callback, args)`,
-`letValue(target, args)`, and `syncWait(env)`. The lower-level
-sender/receiver protocol now references completion values and distinguishes
-logical completion from safe retirement. This intentionally strengthens the
-lifetime contract beyond P2300's rule that permits operation destruction inside
-a value, error, or stopped completion callback.
+## Completion permits destruction
 
-## Two completion moments
+Start each operation once and deliver exactly one of `setValue(*const Values)`,
+`setError(anyerror)`, or `setStopped()`. A receiver may destroy or reconstruct the
+operation **inside this notification**, or keep it alive. Producers must finish
+all operation accesses, unregister cancellation, and perform necessary cleanup
+before notifying. No operation, embedded receiver, or parent access is permitted
+thereafter. Caching a pointer does not keep its target alive.
 
-`setValue(*const Values)`, `setError(anyerror)`, and `setStopped()` publish
-exactly one logical result. At that point the root connection must not be
-destroyed, moved, or reconstructed, and resources still used by the producer
-must remain alive.
+`ex.connectInto(&operation, sender, receiver)` (`ex.connect` is an alias) constructs
+`ex.Connection(S, R)` and its known children at their final addresses. Never copy
+or move connected storage, even before start. A factory's dependent child connects
+when its input becomes available. Storage stays stable until its owner destroys
+or reconstructs it.
 
-`ex.connect(sender, &receiver)` returns `ex.Connection(SenderType)`. It embeds
-the raw `SenderType.Operation` and an execution scope and must remain at a
-stable address after start. Once every execution entry exits, the root
-receiver's optional `setFinished()` is called exactly once. The connection may
-then be retired, including from `setFinished` itself. The dispatcher never
-accesses that connection afterward.
+```zig
+var operation: ex.Connection(@TypeOf(sender), @TypeOf(&receiver)) = undefined;
+ex.connectInto(&operation, sender, &receiver);
+operation.start(); // Synchronous completion may already have destroyed operation.
+```
 
-A manual receiver without `setFinished` needs an external proof that execution
-has exited, for example after a driving `RunLoop.run()` returns. Merely
-observing `setValue` is insufficient. Custom receivers should normally use
-`setFinished` to notify their owner.
+There is no `setFinished` notification or execution-scope acquire/release protocol.
+Custom sources that access themselves after completion must migrate. This is a
+breaking low-level protocol change; fluent composition, `syncWait`, and `spawn`
+keep their call syntax.
 
-`syncWait` uses a root connection and returns only after `setFinished`.
-Successful tuples are copied out of the scope. Pointers and slices inside that
-tuple do not extend the referenced object's lifetime and must not expose
-operation-internal storage to the caller.
+## Owners may retain children and borrow results
 
-## Result storage
-
-A successful value must live in the operation itself, in an upstream operation
-within the same execution scope, or in external storage known to outlive the
-scope. It cannot be modified after publication. Never pass a receiver the
-address of a callback-local tuple.
+Permission to destroy is not mandatory destruction. Successful tuples live in
+operation storage, retained upstream operations, or externally owned storage with
+an explicit lifetime. Published tuples remain valid and immutable while retained;
+do not publish addresses of callback-local variables. Destruction or reconstruction
+ends the corresponding borrow. Empty tuples may use static empty storage.
 
 ```zig
 pub const Values = ex.Values(.{i64});
-pub const Operation = struct {
-    receiver: ex.Receiver(Values),
-    output: Values = undefined,
-    pub fn start(self: *@This()) void {
-        self.output = .{42};
-        self.receiver.setValue(&self.output);
-    }
-};
+pub fn Operation(comptime R: type) type {
+    return struct {
+        receiver: ex.TypedReceiver(Values, R),
+        output: Values = undefined,
+        pub fn start(self: *@This()) void {
+            self.output = .{42};
+            self.receiver.setValue(&self.output); // Last operation access.
+        }
+    };
+}
+pub fn connectInto(_: @This(), out: anytype, receiver: anytype) void {
+    out.* = .{ .receiver = .init(receiver) };
+}
 ```
 
-`then` writes application results into its own output slot. `letValue` and
-`upstream()` borrow upstream results instead of copying inputs or constructing
-a `just` sender containing the same tuple. `continuesOn` and
-`withStopToken` retain result pointers. `whenAll` retains branch pointers and
-constructs contiguous completion-argument storage after every branch succeeds.
-Callbacks receive its elements as separate arguments; `syncWait` copies the
-argument tuple out as its return value.
+`letValue`/`upstream()`, `continuesOn`, and stop wrappers retain their children and
+borrow results. They need no new payload copies for this protocol. `then` writes
+new results into its output. Multi-input `whenAll` retains child/result pointers
+and constructs one combined tuple; a single input forwards directly. Reusing a
+union between stages would require preserving still-needed data first; current
+let operations deliberately retain both stages.
 
-`split` is a separate ownership boundary: shared state contains a cache, and
-each subscription operation stores its own result so asynchronous downstream
-work does not depend on a released owner. Pointers and slices remain shallow
-copies, and the library never frees user resources automatically.
+`split` has independent shared-cache and subscription result storage. Pointer and
+slice copies remain shallow. `syncWait` wakes on completion and copies its return
+tuple before dropping local operation storage. Pointers within that tuple must
+not refer to storage that disappears when syncWait returns.
 
-Callback argument types do not change. Ordinary by-value `call` or
-`callTuple` may still copy. The framework avoids redundant payload copies
-during forwarding but does not promise zero copies in arbitrary application
-code or sender construction. Whether a producer writes directly into its output
-slot also depends on Zig's backend.
+## Asynchronous sources and concurrency
 
-## Protecting asynchronous entries
+Completion can occur on another thread before `start()` returns. Once published,
+a source must not access the operation without its own necessary coordination.
+Queues synchronize publication. Schedulers detach tasks before execution and do
+not inspect them afterward. I/O completes only after the kernel releases borrowed
+buffers, cancellation callbacks are removed, and target/cancellation CQEs are drained.
 
-`Env.scope` is the execution-lifetime service. Ordinary nodes forward it.
-A custom asynchronous sender acquires an entry before publishing work and
-releases it after its final operation access:
+There is no universal atomic execution reference count. Fan-in and racing
+algorithms retain arrival counts protecting startup and cancellation dispatch.
+Shared work retains genuine ownership references. `withStopToken` still coordinates
+startup, cancellation, and completion. These synchronization requirements remain.
+
+`repeat` may reconnect its child during completion. Only starting another iteration
+uses the shared TLS trampoline; terminal results forward directly. Copy control
+values before reconnecting, and never read the previous child afterward. Owners
+store state that must survive iterations outside the reconstructed child.
+
+## Associated resource cleanup
+
+`Env.scope` now refers only to a resource cleanup registry (the compatibility name
+is `Scope`). It has no active count, parent references, enter/leave, acquire/release,
+or idle notification. Only algorithms registering resources, such as `associate`,
+lock it. Ordinary I/O and scheduling do not count execution entries.
+
+An association can protect resources borrowed by asynchronous downstream work.
+The root detaches records and copies release actions onto the stack before calling
+the final receiver, then releases those independent actions afterward. It never
+reads destroyed operation storage. `whenAny` branches use the enclosing registry;
+repeat extracts iteration records at each storage-reuse boundary. Stack use grows
+with the number of associations at that boundary.
+
+`spawn` frees its allocation in its completion receiver, then releases its independent
+counting-scope association. Wait for that scope's `join()` before reclaiming resources
+protected by it: observing value completion alone does not imply all external
+associations have been released. Joining a counting scope from a graph still holding
+an association to it would wait on itself.
+
+## Typed environments
+
+`ex.UnstoppableEnv` carries a zero-sized `NeverStopToken`; `ex.Env` retains a runtime
+stop token. Built-in adaptors preserve `EnvOf(R)` instead of erasing every environment.
+I/O/subscription/parent-stop callback storage disappears for never-stop environments.
+`syncWait(.{})` and `spawn(..., .{ .allocator = allocator })` infer this environment;
+explicit stop tokens retain cancellation. Manual receivers may declare:
 
 ```zig
-// Before submitting work to another thread or backend:
-const scope = self.receiver.getEnv().scope;
-ex.Scope.acquire(scope);
-// submit(self); a failure path must publish an error and release(scope).
-
-// In the corresponding completion entry:
-const scope = self.receiver.getEnv().scope;
-// Store the result, unregister cancellation, notify, and finish local cleanup.
-self.receiver.setValue(&self.output);
-// Every operation access must finish before release.
-ex.Scope.release(scope);
+pub fn getEnv(_: *@This()) ex.UnstoppableEnv { return .{}; }
 ```
 
-Every acquire must have one release, and no operation memory may be accessed
-after release. Root `start` already holds an entry, so ordinary synchronous
-nodes do not increment the counter individually. Scheduler tasks, I/O
-completions, shared subscriptions, and cancellation paths that can cause
-completion are protected. A custom asynchronous producer that fails to acquire
-an entry violates the protocol and can trigger assertions in Debug or
-ReleaseSafe builds when the root scope becomes idle.
+`withStopToken` and sibling-canceling combinators still provide stoppable environments.
+`readEnv()` returns a dynamic Env snapshot to preserve its static Values API. The
+explicit legacy erased Receiver also erases environment types. Custom forwarding
+receivers should return `ex.EnvOf(R)`, or explicitly use `.toDynamic()` when a
+dynamic Env is intended.
 
-The acquire/release synchronization makes stored results and completion state
-visible to `setFinished` after the final entry exits. A scope does not allocate,
-but asynchronous entries use atomic counting and therefore add synchronization
-cost; this is not a claim that every workload becomes faster.
-
-Each `ex.connect` creates an independent root. An existing `Env.scope` does
-not make another root its implicit owner. Low-level
-`sender.connect(Receiver)` returns a raw operation for composition internals;
-manual users must supply a scope and obey the storage rules.
-
-## Loops and storage reuse
-
-`repeatEffect` creates a child scope for each round while its parent scope
-keeps the overall loop alive. The next connect/start may overwrite child
-operation storage only after that round logically completes and every execution
-entry exits. A synchronous 100,000-round loop still uses a trampoline, and
-asynchronous rounds do not grow the call stack recursively. State shared across
-rounds belongs outside the loop behind an explicit pointer.
-
-## Verification
-
-`tests/lifetime.zig` covers address stability and operation size for a 64 KiB
-payload through nested `upstream`/`letValue`, scheduling, and cancellation
-wrappers; `then` result placement; a producer that continues using its
-operation after `setValue`; delayed `setFinished`/`syncWait`; repeat storage
-reuse; and subscriptions that survive early shared-owner release.
-
-`tests/codegen/receiver_forward.zig` inspects optimized IR across a real
-`Receiver` function-pointer boundary:
-
-```sh
-zig build-obj -O ReleaseSafe --dep zigexec \
-  -Mroot=tests/codegen/receiver_forward.zig -Mzigexec=src/root.zig \
-  -fno-emit-bin -femit-llvm-ir=/tmp/zigexec-receiver-forward.ll
-```
-
-On the tested Zig 0.17 master x86_64 LLVM backend, the 64 KiB tuple is forwarded
-by pointer without a payload memcpy or temporary array in the forwarding
-function. This is not a benchmark for the complete graph.
-
-`tests/codegen/operation_layout.zig` compares layouts before and after the
-change. A 64 KiB `just` payload nested through `letValue`/`upstream`,
-`continuesOn`, and `withStopToken` shrank from **721,592 bytes to 197,544
-bytes**, about 72.6%, for the raw composed operation on x86_64. It excludes the
-root `Connection` wrapper and does not claim that every construction-time copy
-was removed.
-
-```sh
-zig run -O ReleaseSafe --dep zigexec \
-  -Mroot=tests/codegen/operation_layout.zig -Mzigexec=src/root.zig
-```
-
-
-## Associations and branch retirement
-
-`associate` registers a release action in the current execution scope. At idle,
-the dispatcher extracts actions before `setFinished` can free operation records,
-then releases counting-scope associations afterwards. `whenAny` observes each
-branch's execution retirement independently, but forwards its association records
-to the enclosing scope so asynchronous downstream consumers remain protected.
-`repeatEffect` iterations have their own storage-reuse boundary. See
-[counting scopes](counting_scopes.md) and [concurrent results](combinators.md).
+Tests cover destroying the embedded receiver and connection during completion,
+completion before start returns, synchronous/asynchronous repeat, retained 64 KiB
+borrowed values, asynchronous association lifetimes, cancellation races, and I/O
+address reuse. See `tests/completion_protocol.zig`, `tests/lifetime.zig`,
+`tests/associate.zig`, `tests/repeat.zig`, and `tests/io_uring.zig`.

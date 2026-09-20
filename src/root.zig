@@ -26,8 +26,8 @@ pub const WhenAny = types.WhenAny;
 pub const Associated = @import("algorithms/associate.zig").Associated;
 pub const associate = @import("algorithms/associate.zig").associate;
 pub const Bulk = types.Bulk;
-pub const RepeatEffect = types.RepeatEffect;
-pub const RepeatEffectUntil = types.RepeatEffectUntil;
+pub const Repeat = types.Repeat;
+pub const RepeatUntil = types.RepeatUntil;
 pub const WithStopToken = types.WithStopToken;
 pub const Schedule = types.Schedule;
 pub const StartsOn = types.StartsOn;
@@ -54,6 +54,8 @@ pub const spawn = @import("consumers/spawn.zig").spawn;
 pub const StartScheduler = @import("schedulers/start_scheduler.zig");
 pub const ScheduleTask = @import("detail/task.zig").Task;
 pub const connect = core.connect;
+pub const connectInto = core.connectInto;
+pub const TypedReceiver = core.TypedReceiver;
 pub const start = core.start;
 pub fn just(values: anytype) Just(@typeInfo(@import("detail/tuple.zig").ValueTuple(@TypeOf(values))).@"struct".field_types) {
     return asSender(@import("senders/just.zig").just(values));
@@ -104,10 +106,10 @@ pub fn whenAny(senders: anytype) WhenAny(@TypeOf(senders)) {
 pub fn bulk(sender: anytype, count: usize, comptime Callback: type, args: anytype) Bulk(@TypeOf(sender), Callback) {
     return asSender(@import("algorithms/bulk.zig").bulk(sender, count, initCallback(Callback, args)));
 }
-pub fn repeatEffect(sender: anytype) RepeatEffect(@TypeOf(sender)) {
+pub fn repeat(sender: anytype) Repeat(@TypeOf(sender)) {
     return .{ .inner = .{ .sender = sender } };
 }
-pub fn repeatEffectUntil(sender: anytype) RepeatEffectUntil(@TypeOf(sender)) {
+pub fn repeatUntil(sender: anytype) RepeatUntil(@TypeOf(sender)) {
     return .{ .inner = .{ .sender = sender } };
 }
 pub fn schedule(scheduler: anytype) Schedule(@TypeOf(scheduler)) {
@@ -120,6 +122,7 @@ pub fn continuesOn(sender: anytype, scheduler: anytype) ContinuesOn(@TypeOf(send
     return asSender(@import("algorithms/continues_on.zig").continuesOn(sender, scheduler));
 }
 pub const InlineScheduler = @import("schedulers/inline.zig").InlineScheduler;
+pub const TrampolineScheduler = @import("schedulers/trampoline.zig").TrampolineScheduler;
 pub const ThreadPool = @import("schedulers/thread_pool.zig").ThreadPool;
 pub const RunLoop = @import("schedulers/run_loop.zig").RunLoop;
 pub const syncWait = wait.syncWait;
@@ -129,3 +132,14 @@ pub const split = @import("algorithms/split.zig").split;
 
 pub const io = @import("io/root.zig");
 pub const IoUring = @import("backends/io_uring/context.zig");
+
+/// Compatibility aliases; prefer repeat / repeatUntil.
+pub const repeatEffect = repeat;
+pub const repeatEffectUntil = repeatUntil;
+pub const RepeatEffect = Repeat;
+pub const RepeatEffectUntil = RepeatUntil;
+
+pub const EnvOf = core.EnvOf;
+pub const StopCallbackFor = core.StopCallbackFor;
+pub const UnstoppableEnv = @import("execution/environment.zig").UnstoppableEnv;
+pub const NeverStopToken = @import("execution/environment.zig").NeverStopToken;

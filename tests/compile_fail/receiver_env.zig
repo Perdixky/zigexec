@@ -6,5 +6,6 @@ const Receiver = struct {
 };
 test {
     var receiver: Receiver = .{};
-    _ = ex.connect(ex.just(42), &receiver);
+    var unstarted: ex.Connection(@TypeOf(ex.just(42)), @TypeOf(&receiver)) = undefined;
+    ex.connectInto(&unstarted, ex.just(42), &receiver);
 }

@@ -94,10 +94,9 @@ uponError 只有在处理函数不再抛错时才能消除上游错误；调度�
 复制 sender 不会深拷贝指针或 slice 指向的对象，不能捕获即将复用的 accept 迭代存储。
 任务回收顺序是：
 
-1. 发布完成结果。
-2. 所有执行入口退出，调用根 `setFinished`。
-3. 用显式 allocator 释放 task/operation 内存。
-4. 释放 association，此时才允许 join 完成。
+1. 生产者完成所有 operation 访问，再通知 receiver。
+2. 完成接收函数用显式 allocator 释放 task/operation 内存。
+3. 释放 association，此时才允许 join 完成。
 
 CountingScope 还保护取消派发过程，避免同步完成的子任务在 `requestStop()` 尚未返回时
 销毁 stop source。支持并发 spawn、完成与取消，但 allocator 也必须支持并发。
@@ -111,20 +110,10 @@ CountingScope，不是标准 scope 的成员。producer 必须以空值成功。
 下游请求取消时，取消子任务后排空；成功则正常排空。生产任务错误会保留到清理结束。
 子任务错误仍由各子链处理。使用它时让它负责 join，不要另行 join 与生产任务启动竞争。
 
-[TCP 示例](../examples/tcp_echo.zig) 只有一个未完成的 accept：
-
-```zig
-const accept_loop = Io.accept(context, listener, linux.SOCK.CLOEXEC)
-    .then(SpawnEcho, .{ &scope, allocator, context, once })
-    .repeatEffectUntil();
-_ = try ex.runInScope(&scope, accept_loop).syncWait(.{});
-```
-
-每个连接 spawn 一条以 `schedule(context.getScheduler()).letValue(Echo, ...)` 开始的子链，
-共用一个 io_uring context，各自持有 operation 内的 16 KiB buffer；生产任务立即继续 accept。
-main 只有一次 syncWait。`--once` 接入一个连接后等待该子链正常结束。
-socket 清理覆盖成功、取消、调度失败和 spawn 失败。
-示例没有连接数限制和信号处理；内存随连接数增长，直接终止进程不是协作式优雅退出。
+[TCP 示例](../examples/tcp_echo.zig) 是单 reactor 的专门场景，现在手工持有
+Client operation 并在 completion 回收，不再使用 spawn／CountingScope。
+通用的跨线程任务组仍使用这里描述的结构化所有权 API；runInScope 的生产者失败、
+取消与 join 行为继续由核心及真实 io_uring 测试覆盖。
 
 当前实现了计数、关联与 spawn 模型；完整 async-scope API 中的
 `spawnFuture` 尚未提供。
@@ -160,12 +149,12 @@ _ = try scope.join().syncWait(.{});
 及 connect 时建立 operation 关联有所不同。这是针对 Zig 泛型图没有自动析构的适配，
 避免未启动图泄漏计数。同一 owner 的 take、takeSender 启动和 deinit 等修改需要外部同步。
 
-关联保留到所在执行 scope 退休，包括异步下游消费期间。退休先提取释放动作，
-再允许根 `setFinished` 回收 operation，最后释放关联。
+关联保留到外层图完成，包括异步下游消费期间。完成前先提取独立释放动作，
+再通知根 receiver（允许回收 operation），最后释放关联。
 `whenAny` 的单个分支执行退出不等于资源消费结束，因此把释放挂到外层图；
 repeat 则按每轮存储复用边界释放。不能在持有关联的同一图中 join 该 counting scope，
 否则会等待自身。
 
 退休路径无需堆分配；在释放内嵌记录前，把待执行动作保存到完成线程的栈上，
-栈使用量随该边界待释放的关联数增长。直接使用内部原始 connect 必须提供有效执行
+栈使用量随该边界待释放的关联数增长。直接使用内部原始 connect 必须提供有效资源清理
 scope，否则视图报告 `MissingExecutionScope`；通常应使用 `ex.connect` 或 `syncWait`。

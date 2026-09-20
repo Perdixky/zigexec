@@ -1,24 +1,24 @@
 //! Linux TCP echo server using zigexec + io_uring, without std.Io or libc.
 //! Run: zig build run-echo -- [port] [--once]
-//! One accept loop spawns independent echo tasks on one io_uring scheduler.
+//! One reactor owns the accept operation and an intrusive list of client operations.
 const std = @import("std");
 const ex = @import("zigexec");
 const linux = std.os.linux;
 const Io = ex.io.For(*ex.IoUring);
 
-// The factory lives inside the spawned operation. Its buffer stays at a stable
-// address until that task's setFinished; no buffer points into the accept loop.
+// Each Client owns this buffer at a stable address until its completion.
+// No buffer points into the accept operation or a temporary sender.
 const Echo = struct {
     context: *ex.IoUring,
     socket: i32,
     buffer: [16 * 1024]u8 = undefined,
 
-    const Loop = Io.Recv.LetValue(EchoChunk).Then(DiscardCount).RepeatEffect().UponError(PeerError);
+    const Loop = Io.Recv.LetValue(EchoChunk).Then(DiscardCount).Repeat().UponError(PeerError);
     pub fn call(self: *@This()) Loop {
         return Io.recv(self.context, self.socket, &self.buffer, 0)
             .letValue(EchoChunk, .{self})
             .then(DiscardCount, .{})
-            .repeatEffect()
+            .repeat()
             .uponError(PeerError, .{});
     }
 };
@@ -38,45 +38,107 @@ const PeerError = struct {
         if (err != error.EndOfStream) std.debug.print("connection: {s}\n", .{@errorName(err)});
     }
 };
-const Close = struct {
-    socket: i32,
-    pub fn call(self: @This()) void {
-        _ = linux.close(self.socket);
+// Only the reactor accesses the list and operations. No CountingScope, spawn,
+// per-client stop source, or extra scheduling hop is needed for dispatch.
+const Client = struct {
+    server: *Server,
+    previous: ?*Client = null,
+    next: ?*Client = null,
+    echo: Echo,
+    operation: ex.Connection(Echo.Loop, *Client) = undefined,
+
+    pub fn getEnv(_: *Client) ex.UnstoppableEnv {
+        return .{};
     }
-};
-const CloseError = struct {
-    socket: i32,
-    pub fn call(self: @This(), err: anyerror) void {
-        _ = linux.close(self.socket);
+    pub fn setValue(self: *Client, _: *const ex.Values(.{})) void {
+        defer self.completeOwnership();
+    }
+    pub fn setStopped(self: *Client) void {
+        defer self.completeOwnership();
+    }
+    pub fn setError(self: *Client, err: anyerror) void {
+        defer self.completeOwnership();
         std.debug.print("connection: {s}\n", .{@errorName(err)});
     }
-};
-const CloseStopped = struct {
-    socket: i32,
-    pub fn call(self: @This()) ex.JustStopped(.{}) {
-        _ = linux.close(self.socket);
-        return ex.justStopped(ex.Values(.{}));
+    fn completeOwnership(self: *Client) void {
+        const server = self.server;
+        if (self.previous) |previous| previous.next = self.next else server.clients = self.next;
+        if (self.next) |next| next.previous = self.previous;
+        _ = linux.close(self.echo.socket);
+        server.allocator.destroy(self);
+        server.finishIfDrained();
     }
 };
-const SpawnEcho = struct {
-    scope: *ex.CountingScope,
+
+const Dispatch = struct {
+    server: *Server,
+    pub fn call(self: @This(), socket: i32) !bool {
+        const server = self.server;
+        errdefer _ = linux.close(socket);
+        const client = try server.allocator.create(Client);
+        client.* = .{
+            .server = server,
+            .next = server.clients,
+            .echo = .{ .context = server.context, .socket = socket },
+        };
+        if (server.clients) |head| head.previous = client;
+        server.clients = client;
+        ex.connectInto(&client.operation, client.echo.call(), client);
+        client.operation.start(); // May synchronously retire and destroy client.
+        return server.once;
+    }
+};
+
+const Server = struct {
     allocator: std.mem.Allocator,
     context: *ex.IoUring,
+    listener: i32,
     once: bool,
-    pub fn call(self: @This(), socket: i32) !bool {
-        // If admission/allocation fails, the task has not started: retain fd
-        // ownership here. Once spawned, every completion path closes it.
-        errdefer _ = linux.close(socket);
-        try ex.spawn(
-            ex.schedule(self.context.getScheduler())
-                .letValue(Echo, .{ .context = self.context, .socket = socket })
-                .then(Close, .{socket})
-                .uponError(CloseError, .{socket})
-                .letStopped(CloseStopped, .{socket}),
-            self.scope.getToken(),
-            .{ .allocator = self.allocator },
-        );
-        return self.once;
+    clients: ?*Client = null,
+    accept_finished: bool = false,
+    failure: ?anyerror = null,
+    done: ex.RunLoop = .{},
+    launch_task: ex.ScheduleTask = .{ .run = launch },
+    accept_operation: ex.Connection(AcceptLoop, *Server) = undefined,
+    const AcceptLoop = Io.Accept.Then(Dispatch).RepeatUntil();
+
+    pub fn getEnv(_: *Server) ex.UnstoppableEnv {
+        return .{};
+    }
+    pub fn setValue(self: *Server, _: *const ex.Values(.{})) void {
+        defer self.completeOwnership();
+    }
+    pub fn setError(self: *Server, err: anyerror) void {
+        defer self.completeOwnership();
+        self.failure = err;
+        // This context belongs exclusively to the server. Shutdown cancels all
+        // pending I/O; clients retire through their real kernel completions.
+        self.context.shutdown();
+    }
+    pub fn setStopped(self: *Server) void {
+        defer self.completeOwnership();
+        self.setError(error.ServerStopped);
+    }
+    fn completeOwnership(self: *Server) void {
+        self.accept_finished = true;
+        self.finishIfDrained();
+    }
+    fn finishIfDrained(self: *Server) void {
+        if (self.accept_finished and self.clients == null) self.done.finish();
+    }
+    fn launch(task: *ex.ScheduleTask) void {
+        const self: *Server = @fieldParentPtr("launch_task", task);
+        const sender = Io.accept(self.context, self.listener, linux.SOCK.CLOEXEC)
+            .then(Dispatch, .{self}).repeatUntil();
+        ex.connectInto(&self.accept_operation, sender, self);
+        self.accept_operation.start();
+    }
+    fn run(self: *Server) !void {
+        // Dispatch even the first start to the reactor: an inline failure or
+        // start/complete race must not move list bookkeeping onto main.
+        try self.context.getScheduler().submit(&self.launch_task);
+        self.done.run(); // The only cross-thread notification is final drain.
+        if (self.failure) |err| return err;
     }
 };
 
@@ -121,17 +183,55 @@ pub fn main(init: std.process.Init.Minimal) !void {
     _ = try checked("getsockname", linux.getsockname(listener, @ptrCast(&address), &address_length));
     std.debug.print("listening on 127.0.0.1:{d}\n", .{std.mem.bigToNative(u16, address.port)});
 
-    var scope: ex.CountingScope = .{};
-    defer scope.deinit();
+    var server: Server = .{
+        .allocator = allocator,
+        .context = context,
+        .listener = listener,
+        .once = once,
+    };
+    // --once stops accepting after one connection, but waits for its operation
+    // to retire. Every list mutation and per-client start runs on the reactor.
+    try server.run();
+}
 
-    // Exactly one accept is outstanding. spawn returns as soon as the echo task
-    // is started/queued, so repeat immediately accepts the next connection.
-    const accept_loop = Io.accept(context, listener, linux.SOCK.CLOEXEC)
-        .then(SpawnEcho, .{ &scope, allocator, context, once })
-        .repeatEffectUntil();
-    const server = ex.runInScope(&scope, accept_loop);
+test "manual dispatch closes the accepted descriptor when allocation fails" {
+    const t = std.testing;
+    const context = try ex.IoUring.init(t.allocator, .{});
+    defer context.deinit();
+    var sockets: [2]i32 = undefined;
+    _ = try checked("socketpair", linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0, &sockets));
+    defer _ = linux.close(sockets[1]);
+    var server: Server = .{ .allocator = t.failing_allocator, .context = context, .listener = -1, .once = false };
+    try t.expectError(error.OutOfMemory, (Dispatch{ .server = &server }).call(sockets[0]));
+    try t.expectEqual(linux.E.BADF, linux.errno(linux.close(sockets[0])));
+    try t.expect(server.clients == null);
+}
 
-    // The only wait includes the accept loop AND all spawned children. --once
-    // closes admission after one accept and drains that echo task without stop.
-    _ = try server.syncWait(.{});
+test "accept failure cancels and drains manually owned client operations" {
+    const t = std.testing;
+    const context = try ex.IoUring.init(t.allocator, .{ .entries = 2 });
+    defer context.deinit();
+    var sockets: [2]i32 = undefined;
+    _ = try checked("socketpair", linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0, &sockets));
+    defer _ = linux.close(sockets[1]);
+    var server: Server = .{ .allocator = t.allocator, .context = context, .listener = -1, .once = false };
+    const Setup = struct {
+        task: ex.ScheduleTask = .{ .run = run },
+        server: *Server,
+        socket: i32,
+        fn run(task: *ex.ScheduleTask) void {
+            const self: *@This() = @fieldParentPtr("task", task);
+            _ = (Dispatch{ .server = self.server }).call(self.socket) catch @panic("fixture allocation failed");
+            // The peer remains open and sends nothing, so this client is pending
+            // until the invalid listener causes server-wide context shutdown.
+            Server.launch(&self.server.launch_task);
+        }
+    };
+    var setup: Setup = .{ .server = &server, .socket = sockets[0] };
+    try context.getScheduler().submit(&setup.task);
+    server.done.run();
+    try t.expectEqual(error.BadFileDescriptor, server.failure.?);
+    try t.expect(server.accept_finished);
+    try t.expect(server.clients == null);
+    try t.expectEqual(linux.E.BADF, linux.errno(linux.close(sockets[0])));
 }

@@ -40,8 +40,8 @@ const result = (try ex.whenAll(.{
 它仍作为一个参数保留，不会递归展开其字段。
 
 所有分支都会启动。某分支 error/stopped 会请求其他分支停止，并等待全部分支完成；
-最终 error 优先于 stopped，报告最先观察到的错误。与普通组合链一样，
-根 receiver 的 `setFinished` 还会等待生产者执行真正退出。
+最终 error 优先于 stopped，报告最先观察到的错误。分支与取消协调结束后才向下游
+转发完成，此时根 receiver 可以销毁整张图；生产者 completion 后不再访问自身。
 
 `ex.WhenAll(.{ A, B })` 是 sender 类型构造器；`ex.meta.ValuesOf(SenderType)`
 或 `SenderType.Values` 取得完整成功参数 tuple 类型。
@@ -74,7 +74,7 @@ const bytes = (try race.then(Handle, .{}).syncWait(.{})) orelse return;
 后来的错误不会覆盖已经获胜的成功结果。竞争按实际 callback 顺序决定，
 不承诺公平；同步分支按声明顺序启动。所有分支都会启动，即使 token 已请求停止。
 
-确定赢家后请求其他分支停止，并等待**所有分支执行退出**才调用下游。
+确定赢家后请求其他分支停止，并等待**所有分支完成**才调用下游。
 因此 recv 与 timer 的竞争会等内核取消请求收尾，再允许下游复用 buffer。
 不响应取消的分支可能无限拖延整体完成；这不是强制超时或后台遗留任务。
 外部 stop 同样是协作请求，不会覆盖已经确定的赢家。
@@ -94,8 +94,8 @@ const Result = ex.meta.ValueOf(Race);
 ## 所有权边界
 
 聚合结果构造在 operation 存储中，指针和 slice 仍是浅拷贝，不延长所指对象生命周期。
-`whenAny` 分支执行退出后，内嵌 operation 与关联资源仍保持到下游消费结束。
-`repeatEffect` 的每一轮有独立的退休边界。
+`whenAny` 分支完成后，内嵌 operation 与关联资源仍保持到下游消费结束。
+`repeat` 在每一轮完成时独立提取资源清理动作。
 
 算法不自动析构用户资源。失败的 `whenAll` 会丢弃其他分支的成功值，
 `whenAny` 输掉的分支也可能已打开文件或接受 socket。应在分支中安排清理，

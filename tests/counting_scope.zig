@@ -18,17 +18,20 @@ const Capture = struct {
         return .{ .stop_token = self.token, .start_scheduler = self.scheduler };
     }
     pub fn setValue(self: *@This(), _: *const Empty) void {
+        defer self.completeOwnership();
         self.completions += 1;
     }
     pub fn setError(self: *@This(), err: anyerror) void {
+        defer self.completeOwnership();
         self.err = err;
         self.completions += 1;
     }
     pub fn setStopped(self: *@This()) void {
+        defer self.completeOwnership();
         self.stopped = true;
         self.completions += 1;
     }
-    pub fn setFinished(self: *@This()) void {
+    fn completeOwnership(self: *@This()) void {
         self.finished = true;
         self.done.set();
     }
@@ -40,30 +43,24 @@ const Gate = struct {
         gate: *Gate,
         pub const Values = Empty;
         pub const can_error = false;
-        pub const Operation = struct {
-            gate: *Gate,
-            receiver: ex.Receiver(Empty),
-            pub fn start(self: *@This()) void {
-                self.gate.receiver = self.receiver;
-                ex.Scope.acquire(self.receiver.env.scope);
-            }
-        };
-        pub fn connect(self: @This(), receiver: ex.Receiver(Empty)) Operation {
-            return .{ .gate = self.gate, .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                gate: *Gate,
+                receiver: ex.TypedReceiver(Empty, R),
+                pub fn start(self: *@This()) void {
+                    self.gate.receiver = ex.Receiver(Empty).init(&self.receiver);
+                }
+            };
+        }
+        pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .gate = self.gate, .receiver = .init(receiver) };
         }
     };
     fn sender(self: *Gate) Sender {
         return .{ .gate = self };
     }
-    fn publish(self: *Gate) void {
-        self.receiver.setValue(&self.output);
-    }
-    fn retire(self: *Gate) void {
-        ex.Scope.release(self.receiver.env.scope);
-    }
     fn finish(self: *Gate) void {
-        self.publish();
-        self.retire();
+        self.receiver.setValue(&self.output);
     }
 };
 const NeverError = struct {
@@ -98,7 +95,8 @@ test "association ownership transfer and independent association after join star
     try t.expect(!first.isEngaged());
     first.deinit(); // Empty is harmless.
     var capture: Capture = .{};
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     var second = moved.tryAssociate();
     try t.expect(second.isEngaged());
@@ -117,12 +115,11 @@ test "join permits further spawn until last association retires" {
         var second: Gate = .{};
         try ex.spawn(first.sender(), scope.getToken(), alloc_env);
         var capture: Capture = .{};
-        var join = ex.connect(scope.join(), &capture);
+        var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+        ex.connectInto(&join, scope.join(), &capture);
         join.start();
         try ex.spawn(second.sender(), scope.getToken(), alloc_env);
-        first.publish();
-        try t.expect(!capture.finished);
-        first.retire();
+        first.finish();
         try t.expect(!capture.finished);
         second.finish();
         try t.expect(capture.finished);
@@ -137,10 +134,11 @@ test "close rejects new work without canceling existing work" {
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     scope.close();
-    try t.expect(!gate.receiver.env.stop_token.stopRequested());
+    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
     try t.expectError(error.ScopeClosed, ex.spawn(ex.just(.{}), scope.getToken(), alloc_env));
     var capture: Capture = .{};
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     gate.finish();
     try t.expect(capture.finished and !capture.stopped);
@@ -164,7 +162,7 @@ test "stopped child does not cancel peers or close scope" {
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     try ex.spawn(ex.justStopped(Empty), scope.getToken(), alloc_env);
-    try t.expect(!gate.receiver.env.stop_token.stopRequested());
+    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
     try ex.spawn(ex.just(.{}), scope.getToken(), alloc_env);
     gate.finish();
     try t.expect((try scope.join().syncWait(.{})) != null);
@@ -178,11 +176,12 @@ test "join cancellation never cancels scope children or skips waiting" {
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     var capture: Capture = .{ .token = stop.token() };
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     _ = stop.requestStop();
     try t.expect(!capture.finished);
-    try t.expect(!gate.receiver.env.stop_token.stopRequested());
+    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
     gate.finish();
     // InlineScheduler observes the join receiver's cancellation on scheduling.
     try t.expect(capture.finished and capture.stopped);
@@ -198,8 +197,10 @@ test "multiple joiners schedule on their own environments" {
     const right_scheduler = right_loop.getScheduler();
     var left: Capture = .{ .scheduler = ex.StartScheduler.init(&left_scheduler) };
     var right: Capture = .{ .scheduler = ex.StartScheduler.init(&right_scheduler) };
-    var one = ex.connect(scope.join(), &left);
-    var two = ex.connect(scope.join(), &right);
+    var one: ex.Connection(@TypeOf(scope.join()), @TypeOf(&left)) = undefined;
+    ex.connectInto(&one, scope.join(), &left);
+    var two: ex.Connection(@TypeOf(scope.join()), @TypeOf(&right)) = undefined;
+    ex.connectInto(&two, scope.join(), &right);
     one.start();
     two.start();
     association.deinit();
@@ -229,7 +230,8 @@ test "async join reports scheduler failure only after retirement" {
     loop.finish();
     const scheduler = loop.getScheduler();
     var capture: Capture = .{ .scheduler = ex.StartScheduler.init(&scheduler) };
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     try t.expect(!capture.finished);
     association.deinit();
@@ -281,7 +283,7 @@ test "handled child error stays local and join has no error aggregation" {
     var handled = false;
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     try ex.spawn(ex.justError(Empty, error.ChildFailed).uponError(Handle, .{&handled}), scope.getToken(), alloc_env);
-    try t.expect(handled and !gate.receiver.env.stop_token.stopRequested());
+    try t.expect(handled and !gate.receiver.getEnv().stop_token.stopRequested());
     gate.finish();
     _ = try scope.join().syncWait(.{});
 }
@@ -292,7 +294,8 @@ test "token wrap combines receiver and scope cancellation without acquiring asso
     var stop: ex.StopSource = .{};
     defer stop.deinit();
     var capture: Capture = .{ .token = stop.token() };
-    var op = ex.connect(scope.getToken().wrap(support.AwaitStop{}), &capture);
+    var op: ex.Connection(@TypeOf(scope.getToken().wrap(support.AwaitStop{})), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&op, scope.getToken().wrap(support.AwaitStop{}), &capture);
     op.start();
     _ = stop.requestStop();
     try t.expect(capture.finished and capture.stopped);
@@ -305,14 +308,18 @@ test "scope may be destroyed by first joiner while remaining joiners are notifie
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .start_scheduler = ex.StartScheduler.init(&inline_scheduler) };
         }
-        pub fn setValue(_: *@This(), _: *const Empty) void {}
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setValue(self: *@This(), _: *const Empty) void {
+            defer self.completeOwnership();
+        }
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("stopped");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.scope.deinit();
             t.allocator.destroy(self.scope);
             self.done = true;
@@ -323,8 +330,10 @@ test "scope may be destroyed by first joiner while remaining joiners are notifie
     var association = scope.getToken().tryAssociate();
     var last: Capture = .{};
     var first: Destroy = .{ .scope = scope };
-    var one = ex.connect(scope.join(), &last);
-    var two = ex.connect(scope.join(), &first);
+    var one: ex.Connection(@TypeOf(scope.join()), @TypeOf(&last)) = undefined;
+    ex.connectInto(&one, scope.join(), &last);
+    var two: ex.Connection(@TypeOf(scope.join()), @TypeOf(&first)) = undefined;
+    ex.connectInto(&two, scope.join(), &first);
     one.start();
     two.start();
     association.deinit();
@@ -338,14 +347,18 @@ test "counting scope survives synchronous cancellation dispatch until join retir
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .start_scheduler = ex.StartScheduler.init(&inline_scheduler) };
         }
-        pub fn setValue(_: *@This(), _: *const Empty) void {}
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setValue(self: *@This(), _: *const Empty) void {
+            defer self.completeOwnership();
+        }
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("error");
         }
-        pub fn setStopped(_: *@This()) void {
+        pub fn setStopped(self: *@This()) void {
+            defer self.completeOwnership();
             @panic("join must succeed");
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             self.scope.deinit();
             t.allocator.destroy(self.scope);
             self.done = true;
@@ -355,7 +368,8 @@ test "counting scope survives synchronous cancellation dispatch until join retir
     scope.* = .{};
     for (0..32) |_| try ex.spawn(awaitStop(), scope.getToken(), alloc_env);
     var capture: Destroy = .{ .scope = scope };
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     _ = scope.requestStop();
     try t.expect(capture.done);
@@ -375,7 +389,8 @@ test "runInScope outer cancellation cancels producer and children then drains" {
     defer stop.deinit();
     try ex.spawn(awaitStop(), scope.getToken(), alloc_env);
     var capture: Capture = .{ .token = stop.token() };
-    var run = ex.connect(ex.runInScope(&scope, support.AwaitStop{}), &capture);
+    var run: ex.Connection(@TypeOf(ex.runInScope(&scope, support.AwaitStop{})), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&run, ex.runInScope(&scope, support.AwaitStop{}), &capture);
     run.start();
     _ = stop.requestStop();
     try t.expect(capture.finished and capture.stopped);
@@ -387,10 +402,11 @@ test "runInScope successful producer drains without canceling children" {
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     var capture: Capture = .{};
-    var run = ex.connect(ex.runInScope(&scope, ex.just(.{})), &capture);
+    var run: ex.Connection(@TypeOf(ex.runInScope(&scope, ex.just(.{}))), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&run, ex.runInScope(&scope, ex.just(.{})), &capture);
     run.start();
     try t.expect(!capture.finished);
-    try t.expect(!gate.receiver.env.stop_token.stopRequested());
+    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
     gate.finish();
     try t.expect(capture.finished and !capture.stopped);
 }
@@ -414,7 +430,8 @@ test "concurrent spawn and completions while join is active" {
     var producers_alive = scope.getToken().tryAssociate();
     var count: std.atomic.Value(usize) = .init(0);
     var capture: Capture = .{};
-    var join = ex.connect(scope.join(), &capture);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join(), &capture);
     join.start();
     var producers: [4]std.Thread = undefined;
     for (&producers) |*thread| thread.* = try std.Thread.spawn(.{}, Producer.run, .{ scope.getToken(), pool.getScheduler(), &count });
@@ -471,12 +488,11 @@ test "invalid join environment still waits for child retirement before reporting
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     var receiver: Receiver = .{};
-    var join = ex.connect(scope.join(), &receiver);
+    var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&receiver)) = undefined;
+    ex.connectInto(&join, scope.join(), &receiver);
     join.start();
     try t.expectEqual(null, receiver.err);
-    gate.publish();
-    try t.expectEqual(null, receiver.err);
-    gate.retire();
+    gate.finish();
     try t.expectEqual(error.MissingStartScheduler, receiver.err.?);
 }
 
@@ -492,18 +508,20 @@ test "syncWait asynchronous join resumes on waiting thread by default" {
         entered: *support.Event,
         scope: *ex.SimpleCountingScope,
         pub const Values = Empty;
-        pub const Operation = struct {
-            sender: Self,
-            receiver: ex.Receiver(Empty),
-            join_op: ex.SimpleCountingScope.Join.Operation = undefined,
-            pub fn start(self: *@This()) void {
-                self.join_op = self.sender.scope.join().connect(self.receiver);
-                self.join_op.start(); // Registered while worker is still blocked.
-                self.sender.entered.set();
-            }
-        };
-        pub fn connect(self: @This(), receiver: ex.Receiver(Empty)) Operation {
-            return .{ .sender = self, .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                sender: Self,
+                receiver: ex.TypedReceiver(Empty, R),
+                join_op: ex.SimpleCountingScope.Join.Operation(ex.TypedReceiver(Empty, R)) = undefined,
+                pub fn start(self: *@This()) void {
+                    self.sender.scope.join().connectInto(&self.join_op, self.receiver);
+                    self.join_op.start(); // Registered while worker is still blocked.
+                    self.sender.entered.set();
+                }
+            };
+        }
+        pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .sender = self, .receiver = .init(receiver) };
         }
     };
     const CheckThread = struct {
@@ -528,7 +546,8 @@ test "runInScope pre-cancellation and cancellation after producer retirement" {
     defer scope.deinit();
     try ex.spawn(awaitStop(), scope.getToken(), alloc_env);
     var capture: Capture = .{ .token = stop.token() };
-    var run = ex.connect(ex.runInScope(&scope, ex.just(.{})), &capture);
+    var run: ex.Connection(@TypeOf(ex.runInScope(&scope, ex.just(.{}))), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&run, ex.runInScope(&scope, ex.just(.{})), &capture);
     run.start();
     try t.expect(!capture.finished);
     _ = stop.requestStop();
@@ -553,10 +572,10 @@ test "spawn deallocates operation before releasing the scope association" {
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), .{ .allocator = allocator.allocator() });
     var capture: Capture = .{};
-    var join = ex.connect(scope.join().then(Check, .{&allocator}), &capture);
+    var join: ex.Connection(@TypeOf(scope.join().then(Check, .{&allocator})), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&join, scope.join().then(Check, .{&allocator}), &capture);
     join.start();
-    gate.publish();
     try t.expectEqual(0, allocator.deallocations);
-    gate.retire();
+    gate.finish();
     try t.expect(capture.finished);
 }

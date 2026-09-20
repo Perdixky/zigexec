@@ -20,32 +20,34 @@ const Query = struct {
 const Allocating = struct {
     outcome: enum { value, err, stopped } = .value,
     pub const Values = ex.Values(.{usize});
-    pub const Operation = struct {
-        outcome: @FieldType(Allocating, "outcome"),
-        receiver: ex.Receiver(Values),
-        output: Values = undefined,
-        fn work(allocator: std.mem.Allocator) !usize {
-            const first = try allocator.alloc(u8, 32);
-            defer allocator.free(first);
-            const second = try allocator.alloc(u8, 64);
-            defer allocator.free(second);
-            @memset(first, 1);
-            @memset(second, 2);
-            return first.len + second.len;
-        }
-        pub fn start(self: *@This()) void {
-            const allocator = self.receiver.getEnv().getAllocator() catch |err| return self.receiver.setError(err);
-            const count = work(allocator) catch |err| return self.receiver.setError(err);
-            self.output = .{count};
-            switch (self.outcome) {
-                .value => self.receiver.setValue(&self.output),
-                .err => self.receiver.setError(error.AfterAllocation),
-                .stopped => self.receiver.setStopped(),
+    pub fn Operation(comptime R: type) type {
+        return struct {
+            outcome: @FieldType(Allocating, "outcome"),
+            receiver: ex.TypedReceiver(Values, R),
+            output: Values = undefined,
+            fn work(allocator: std.mem.Allocator) !usize {
+                const first = try allocator.alloc(u8, 32);
+                defer allocator.free(first);
+                const second = try allocator.alloc(u8, 64);
+                defer allocator.free(second);
+                @memset(first, 1);
+                @memset(second, 2);
+                return first.len + second.len;
             }
-        }
-    };
-    pub fn connect(self: @This(), receiver: ex.Receiver(Values)) Operation {
-        return .{ .outcome = self.outcome, .receiver = receiver };
+            pub fn start(self: *@This()) void {
+                const allocator = self.receiver.getEnv().getAllocator() catch |err| return self.receiver.setError(err);
+                const count = work(allocator) catch |err| return self.receiver.setError(err);
+                self.output = .{count};
+                switch (self.outcome) {
+                    .value => self.receiver.setValue(&self.output),
+                    .err => self.receiver.setError(error.AfterAllocation),
+                    .stopped => self.receiver.setStopped(),
+                }
+            }
+        };
+    }
+    pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+        out.* = .{ .outcome = self.outcome, .receiver = .init(receiver) };
     }
 };
 
@@ -102,7 +104,8 @@ test "custom terminal receiver supplies allocator without syncWait" {
         }
     };
     var capture: Capture = .{};
-    var operation = ex.connect(Allocating{}, &capture);
+    var operation: ex.Connection(@TypeOf(Allocating{}), @TypeOf(&capture)) = undefined;
+    ex.connectInto(&operation, Allocating{}, &capture);
     try t.expectEqual(null, capture.result);
     operation.start();
     try t.expectEqual(96, capture.result.?);
@@ -163,7 +166,7 @@ test "empty environments execute synchronous and scheduled graphs without an all
     };
     const task = ex.just(.{}).letValue(ex.upstream().letValue(ex.readEnv(), .{}), .{})
         .withStopToken(stop.token()).continuesOn(pool.getScheduler())
-        .then(Check, .{}).repeatEffectUntil().startsOn(pool.getScheduler());
+        .then(Check, .{}).repeatUntil().startsOn(pool.getScheduler());
     const result = (try ex.whenAll(.{ task, ex.just(42) }).syncWait(.{})).?;
     try t.expectEqual(42, result[0]);
 }

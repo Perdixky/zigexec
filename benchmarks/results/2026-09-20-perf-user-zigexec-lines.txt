@@ -1,0 +1,134 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles:u'
+# Event count (approx.): 5023723469
+#
+# Overhead  Source:Line         
+# ........  ....................
+#
+    17.33%  context.zig:218
+    14.85%  scope.zig:51
+    13.03%  sync.zig:34
+     9.07%  sync.zig:27
+     8.25%  repeat_effect.zig:41
+     8.04%  scope.zig:62
+     3.50%  context.zig:180
+     3.38%  atomic.zig:0
+     2.22%  sender.zig:29
+     1.65%  repeat_effect.zig:0
+     1.36%  repeat_effect.zig:60
+     1.04%  atomic.zig:29
+     1.00%  context.zig:94
+     1.00%  sender.zig:44
+     0.89%  context.zig:217
+     0.54%  scope.zig:49
+     0.51%  repeat_effect.zig:40
+     0.51%  atomic.zig:57
+     0.50%  ??:0
+     0.50%  scope.zig:50
+     0.48%  context.zig:219
+     0.47%  send_all.zig:38
+     0.44%  scope.zig:68
+     0.43%  sender.zig:46
+     0.42%  scope.zig:58
+     0.39%  scope.zig:59
+     0.37%  repeat_effect.zig:38
+     0.33%  source.zig:47
+     0.31%  atomic.zig:21
+     0.30%  atomic.zig:49
+     0.26%  IoUring.zig:228
+     0.25%  submission.zig:0
+     0.25%  IoUring.zig:146
+     0.25%  IoUring.zig:143
+     0.20%  sender.zig:0
+     0.20%  repeat_effect.zig:64
+     0.20%  context.zig:242
+     0.19%  context.zig:84
+     0.19%  let.zig:49
+     0.19%  repeat_effect.zig:72
+     0.18%  submission.zig:21
+     0.17%  submission.zig:20
+     0.17%  callback.zig:42
+     0.16%  callback.zig:27
+     0.16%  repeat_effect.zig:35
+     0.15%  repeat_effect.zig:79
+     0.15%  context.zig:177
+     0.14%  let.zig:64
+     0.14%  memcpy.zig:145
+     0.13%  context.zig:163
+     0.13%  sender.zig:63
+     0.12%  context.zig:0
+     0.12%  completion.zig:5
+     0.12%  repeat_effect.zig:51
+     0.12%  scope.zig:46
+     0.11%  repeat_effect.zig:43
+     0.11%  context.zig:268
+     0.11%  callback.zig:39
+     0.09%  scope.zig:65
+     0.08%  transform.zig:63
+     0.08%  context.zig:259
+     0.08%  context.zig:90
+     0.08%  send_all.zig:28
+     0.08%  context.zig:241
+     0.08%  callback.zig:23
+     0.07%  receiver.zig:111
+     0.07%  send_all.zig:0
+     0.07%  context.zig:81
+     0.07%  callback.zig:51
+     0.07%  context.zig:164
+     0.07%  repeat_effect.zig:54
+     0.07%  callback.zig:0
+     0.05%  send_all.zig:37
+     0.05%  callback.zig:30
+     0.05%  sender.zig:47
+     0.05%  send_all.zig:65
+     0.05%  IoUring.zig:266
+     0.04%  repeat_effect.zig:80
+     0.04%  scope.zig:39
+     0.04%  IoUring.zig:144
+     0.04%  memcpy.zig:0
+     0.04%  context.zig:272
+     0.04%  receiver.zig:134
+     0.04%  transform.zig:39
+     0.03%  IoUring.zig:230
+     0.03%  memcpy.zig:146
+     0.03%  callback.zig:24
+     0.03%  source.zig:45
+     0.03%  scope.zig:66
+     0.03%  sender.zig:32
+     0.03%  submission.zig:17
+     0.03%  IoUring.zig:171
+     0.03%  sync.zig:0
+     0.03%  memcpy.zig:108
+     0.03%  context.zig:243
+     0.01%  sender.zig:43
+     0.01%  IoUring.zig:296
+     0.01%  source.zig:46
+     0.01%  transform.zig:49
+     0.01%  callback.zig:21
+     0.01%  sender.zig:41
+     0.01%  scope.zig:57
+     0.01%  memcpy.zig:92
+     0.01%  memcpy.zig:186
+     0.01%  repeat_effect.zig:74
+     0.01%  context.zig:116
+     0.01%  memcpy.zig:170
+     0.01%  context.zig:178
+     0.01%  IoUring.zig:178
+     0.01%  submission.zig:23
+     0.01%  context.zig:165
+     0.01%  IoUring.zig:140
+     0.01%  repeat_effect.zig:55
+     0.01%  context.zig:21
+     0.01%  scope.zig:64
+     0.01%  context.zig:258
+     0.01%  send_all.zig:54
+     0.01%  context.zig:89
+
+
+#
+# (Tip: To filter subset of samples with report or script add --time X-Y or --cpu A,B,C or --socket-filter ...)
+#

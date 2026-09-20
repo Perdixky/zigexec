@@ -40,39 +40,40 @@ pub fn Associated(comptime S: type, comptime Token: type) type {
             owner: *Self,
             transfer: bool,
             pub const Values = S.Values;
-            pub const can_error = true; // Missing execution lifetime on raw use.
-            pub const Operation = struct {
-                owner: *Self,
-                transfer: bool,
-                receiver: ex.Receiver(S.Values),
-                association: Association = .{},
-                child: Wrapped.Operation = undefined,
-                retirement: ex.Scope.Retirement = .{ .prepare = prepare },
-                started: bool = false,
-                pub fn start(self: *@This()) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
-                    const lifetime = self.receiver.env.scope orelse {
-                        self.receiver.setError(error.MissingExecutionScope);
-                        return;
-                    };
-                    self.association = if (self.transfer) self.owner.association.take() else self.owner.association.tryAssociate();
-                    if (!self.association.isEngaged()) {
-                        self.receiver.setStopped();
-                        return;
+            pub const can_error = true; // Missing cleanup registry on raw use.
+            pub fn Operation(comptime R: type) type {
+                return struct {
+                    owner: *Self,
+                    transfer: bool,
+                    receiver: ex.TypedReceiver(S.Values, R),
+                    association: Association = .{},
+                    child: ex.meta.OperationOf(Wrapped, ex.TypedReceiver(S.Values, R)) = undefined,
+                    retirement: ex.Scope.Retirement = .{ .prepare = prepare },
+                    started: bool = false,
+                    pub fn start(self: *@This()) void {
+                        std.debug.assert(!self.started);
+                        self.started = true;
+                        const lifetime = self.receiver.getEnv().scope orelse {
+                            self.receiver.setError(error.MissingExecutionScope);
+                            return;
+                        };
+                        self.association = if (self.transfer) self.owner.association.take() else self.owner.association.tryAssociate();
+                        if (!self.association.isEngaged()) {
+                            self.receiver.setStopped();
+                            return;
+                        }
+                        lifetime.onRetired(&self.retirement);
+                        self.child.start();
                     }
-                    // Copy/connect before downstream callbacks can destroy owner.
-                    self.child = self.owner.wrapped.connect(self.receiver);
-                    lifetime.onRetired(&self.retirement);
-                    self.child.start();
-                }
-                fn prepare(record: *ex.Scope.Retirement) ex.Scope.ReleaseAction {
-                    const self: *@This() = @fieldParentPtr("retirement", record);
-                    return self.association.takeReleaseAction();
-                }
-            };
-            pub fn connect(self: @This(), receiver: ex.Receiver(S.Values)) Operation {
-                return .{ .owner = self.owner, .transfer = self.transfer, .receiver = receiver };
+                    fn prepare(record: *ex.Scope.Retirement) ex.Scope.ReleaseAction {
+                        const self: *@This() = @fieldParentPtr("retirement", record);
+                        return self.association.takeReleaseAction();
+                    }
+                };
+            }
+            pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+                out.* = .{ .owner = self.owner, .transfer = self.transfer, .receiver = .init(receiver) };
+                @import("../execution/protocol.zig").connectChild(&out.child, self.owner.wrapped, out.receiver);
             }
         };
     };

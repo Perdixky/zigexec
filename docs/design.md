@@ -60,8 +60,8 @@ A sender provides:
 
 ```zig
 pub const Values = @Tuple(&.{i64});
-pub const Operation = ...;
-pub fn connect(self: Self, receiver: Receiver(Values)) Operation;
+pub fn Operation(comptime R: type) type { ... }
+pub fn connectInto(self: Self, out: anytype, receiver: anytype) void;
 ```
 
 An operation provides `start(self: *Operation) void` and starts once. Exactly
@@ -70,13 +70,20 @@ User receivers expose an `Env` through `getEnv()`. Both allocator and stop
 token are optional; querying a missing allocator returns
 `error.MissingAllocator`.
 
-Zig has no C++ guaranteed copy elision. `connect` returns a value without
-self-references and `start` connects children in their final storage.
-Operations cannot move after start. Public `ex.connect` returns
-`Connection(S)`, whose execution scope separates logical completion from safe
-storage retirement: `setValue` accepts `*const Values`, and a root receiver
-retires the connection only in `setFinished`. See
-[operation lifetimes](lifetimes.md).
+Zig has no C++ guaranteed copy elision. `connectInto(&op, sender, receiver)`
+constructs an `ex.Connection(S, R)` at its final address, including known child
+operations. `start` starts those operations. A connected operation cannot be
+moved or copied, even before start. Factory-dependent continuations connect when
+their inputs become available; repeat may reconnect during iteration completion.
+Ordinary adaptors retain their own state and child operations, not the upstream
+sender description. Repeat intentionally retains a description for reconstruction.
+
+`setValue` accepts `*const Values`. Any completion may destroy the operation;
+producers do not access it afterward. Owners may retain child storage for borrowing.
+There is no generic execution reference count. See [operation lifetimes](lifetimes.md).
+P2300 also connects known children during operation construction and permits
+concrete internal receivers to reference parent state; see the
+[P2300 construction research (Chinese)](p2300-operation-state.zh-CN.md).
 
 `connect` is infallible as a protocol. Explicit constructors may return
 allocation errors, or startup may report failures through the error channel.
@@ -117,9 +124,10 @@ separate channels. `syncWait` returns `anyerror!?Values`. Callback
 one-element tuple. Recovery preserves the original success tuple; heterogeneous
 application outcomes can use a tagged union value.
 
-Receivers preserve a static `Values` type while erasing a context and three
-function pointers to avoid recursive generic receiver types. There is no claim
-that all indirect calls disappear or performance equals C++ stdexec.
+Built-in `Operation(R)` types retain concrete receivers. `TypedReceiver(Values, R)`
+stores only R and dispatches completion statically. `Receiver(Values)` remains an
+explicit legacy boundary. Backend requests, cancellation hooks, and heterogeneous
+wait queues still use function pointers for their runtime dispatch.
 
 ## Type construction and contextual inference
 
@@ -205,7 +213,7 @@ target and cancellation CQEs arrive. See the [io_uring backend](io_uring.md).
 ## Current boundaries
 
 `letValue` retains upstream operations and factory state while borrowing
-inputs. The root connection remains until execution entries exit. External
+inputs. The owner may retain child storage after completion to keep borrows valid. External
 pointers, slices, and handles are borrowed by default; scopes do not extend
 factory locals or external resources. Zig values have no implicit destructor,
 so algorithms never call `deinit` for discarded application values.

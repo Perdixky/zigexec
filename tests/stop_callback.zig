@@ -137,30 +137,33 @@ test "callback-driven cancellation propagates through nested graph without polli
         ex.whenAll(.{ ex.asSender(AwaitStop{}), ex.just(.{}) }),
         ex.just(.{}),
     }).withStopToken(added.token()).withStopToken(source.token());
-    const Operation = ex.Connection(@TypeOf(sender));
     const Receiver = struct {
+        const Operation = ex.Connection(@TypeOf(sender), *@This());
         operation: *Operation,
         called: bool = false,
         pub fn getEnv(_: *@This()) ex.Env {
             return .{ .allocator = std.testing.allocator };
         }
-        pub fn setValue(_: *@This(), _: *const @TypeOf(sender).Values) void {
+        pub fn setValue(self: *@This(), _: *const @TypeOf(sender).Values) void {
+            defer self.completeOwnership();
             @panic("unexpected value");
         }
-        pub fn setError(_: *@This(), _: anyerror) void {
+        pub fn setError(self: *@This(), _: anyerror) void {
+            defer self.completeOwnership();
             @panic("unexpected error");
         }
         pub fn setStopped(self: *@This()) void {
-            _ = self;
+            defer self.completeOwnership();
         }
-        pub fn setFinished(self: *@This()) void {
+        fn completeOwnership(self: *@This()) void {
             t.allocator.destroy(self.operation);
             self.called = true;
         }
     };
+    const Operation = Receiver.Operation;
     const operation = try t.allocator.create(Operation);
     var receiver: Receiver = .{ .operation = operation };
-    operation.* = ex.connect(sender, &receiver);
+    ex.connectInto(operation, sender, &receiver);
     operation.start();
     try t.expect(!receiver.called);
     _ = source.requestStop();

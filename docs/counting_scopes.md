@@ -111,10 +111,9 @@ The task owns an independent root `Connection`, not the caller's `Env.scope`.
 Pointer/slice captures stay borrowed; never capture reused accept-iteration
 storage. Reclamation occurs in this order:
 
-1. Publish task completion.
-2. Wait for every execution entry to leave; invoke root `setFinished`.
-3. Free task/operation storage using the explicit allocator.
-4. Release the association, allowing join to complete.
+1. The producer finishes all operation accesses and signals completion.
+2. The completion receiver frees task/operation storage using its allocator.
+3. It releases the association, allowing join to complete.
 
 CountingScope additionally guards cancellation dispatch, so synchronous child
 retirement cannot destroy its stop source during `requestStop()`. Concurrent
@@ -132,23 +131,11 @@ producer success drains normally. It preserves producer errors through cleanup.
 Child errors remain the responsibility of each spawned chain. Let this helper
 manage joining; do not race an independent join against the producer's startup.
 
-[The echo example](../examples/tcp_echo.zig) has exactly one outstanding accept:
-
-```zig
-const accept_loop = Io.accept(context, listener, linux.SOCK.CLOEXEC)
-    .then(SpawnEcho, .{ &scope, allocator, context, once })
-    .repeatEffectUntil();
-_ = try ex.runInScope(&scope, accept_loop).syncWait(.{});
-```
-
-Each accepted socket starts a child beginning with
-`ex.schedule(context.getScheduler()).letValue(Echo, ...)`. All children use the
-same io_uring context, with separate operation-owned 16 KiB buffers. The producer
-immediately resumes accepting. One final syncWait covers the whole service;
-`--once` stops acceptance after one spawn and waits for that child normally.
-Socket cleanup covers completion, cancellation, scheduling failure, and spawn
-failure. The example has no connection limit or signal handler: memory grows with
-live connections, and process termination is not cooperative scope shutdown.
+[The echo example](../examples/tcp_echo.zig) now specializes ownership for its
+single reactor: it manually holds Client operations and reclaims them in
+completion, without spawn or CountingScope. General task groups spanning
+threads still use the structured ownership APIs described here. Core and real
+io_uring tests cover runInScope producer failure, cancellation, and join.
 
 This implements the counting/association/spawn model, not all async-scope APIs:
 `spawnFuture` is not yet provided.
@@ -191,10 +178,10 @@ and connect-time operation association. This deliberate Zig adaptation prevents
 unstarted generic operation graphs from leaking associations. Mutating the same
 owner (`take`, `takeSender` start, or `deinit`) needs external synchronization.
 
-A started association remains engaged until the containing execution scope
-retires, including asynchronous downstream borrowing. Retirement first extracts
-release actions, then permits root `setFinished` to reclaim operation memory,
-then releases associations. A `whenAny` branch's execution ending is not enough:
+A started association remains engaged through asynchronous downstream borrowing.
+The enclosing completion first extracts independent release actions, calls the
+root receiver (which may reclaim operation memory), then releases associations.
+A `whenAny` branch's own completion is not enough:
 its records belong to the enclosing graph. Repeated iterations instead release
 at their own storage-reuse boundary. Do not join a scope from inside a graph
 holding an association to that scope: the join would wait for itself.
@@ -202,5 +189,5 @@ holding an association to that scope: the join would wait for itself.
 The retirement path allocates no heap memory. It copies pending release actions
 onto the completion thread's stack before reclaiming their embedded records;
 stack usage grows with associations retiring at that boundary. Raw internal
-connect usage requires a valid execution scope, otherwise the view reports
+connect usage requires a valid resource cleanup registry, otherwise the view reports
 `MissingExecutionScope`. Prefer public `ex.connect` or `syncWait`.

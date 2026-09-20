@@ -35,7 +35,7 @@ letValue(self, target: anytype, args: anytype)
 
 Zig 不支持同名方法按参数个数重载，因此统一使用两个参数，与 `then` 一致。target 为工厂 **类型**时隐含 comptime，args 初始化其字段；target 为 sender 或子链 **值**时保留运行时状态，args 必须为 `.{}`。类型反射在编译期选择实现，没有运行时分派或类型擦除。传入工厂实例、sender 类型、无效 target 或给子链额外传捕获都会产生明确的编译期错误。
 
-已有 sender 的构造表达式会立即求值，只有 connect/start 被延迟；若构造本身需要在上游成功后才执行，请用工厂。上游 error/stopped 时三种形式均跳过 continuation 并转发原完成；子 sender 的 value/error/stopped 则传到下游。
+已有 sender 的构造表达式立即求值，其 operation 在外层连接时构造，start 仍等待上游成功；依赖输入的 deferred 表达式在输入到达后绑定和连接。若 sender 构造本身需要在上游成功后才执行，请用工厂。上游 error/stopped 时三种形式均跳过 continuation 的执行并转发原完成；子 sender 的 value/error/stopped 则传到下游。
 
 `body` **不是 comptime 参数**：其中可能包含运行时的 config、client、offset。编译期确定的是 `@TypeOf(body)`、图结构、回调身份、输入/输出类型和 operation 布局。捕获的字段值在运行时保存；反射遍历和协议检查全部在编译期完成。
 
@@ -83,11 +83,11 @@ sender.letError(Retry, .{client})
 sender.bulk(count, Fill, .{buffer})
 ```
 
-恢复回调仍须保持原成功 tuple 的类型。error 回调接收 `anyerror`，stopped 回调无输入，bulk 接收 `usize` 索引再接上游值。这些操作以及 `startsOn/continuesOn/withStopToken` 都能用于 deferred 子链。`.repeatEffect()` 重复空成功 effect，`.repeatEffectUntil()` 重复到 effect 返回 true；同样支持 deferred 子链，详见 [重复执行](repeat.zh-CN.md)。
+恢复回调仍须保持原成功 tuple 的类型。error 回调接收 `anyerror`，stopped 回调无输入，bulk 接收 `usize` 索引再接上游值。这些操作以及 `startsOn/continuesOn/withStopToken` 都能用于 deferred 子链。`.repeat()` 重复空成功 effect，`.repeatUntil()` 重复到 effect 返回 true；同样支持 deferred 子链，详见 [重复执行](repeat.zh-CN.md)。
 
 ## 存储与异步借用
 
-构造表达式只保存状态；`connect` 不执行业务逻辑。`start` 后，上游把成功 tuple 存入自己的 operation；scope 借用其地址，构造并连接子链，不再重复保存输入。operation 启动后必须保持地址稳定。根 connection 保留全部存储，直到完成处理的执行入口退出，再调用 setFinished 允许回收。见 [生命周期协议](lifetimes.zh-CN.md)。
+构造表达式只保存状态；`connect` 不执行业务逻辑。`start` 后，上游把成功 tuple 存入自己的 operation；scope 借用其地址，构造并连接子链，不再重复保存输入。operation 从连接时起必须保持地址稳定。完成通知中即可回收根 connection；拥有者也可以继续保留 child，以延长借用结果的存储寿命。生产者通知后不得再访问自身。见 [生命周期协议](lifetimes.zh-CN.md)。
 
 `upstream()` 在框架内部按引用转发成功 tuple，业务 callback 仍使用其声明的参数类型。跨异步使用的动态 buffer 可以通过 allocator 显式分配，再以 slice 传递。slice 的复制只复制地址和长度，底层分配地址不变；其拥有者负责保持内存有效并最终释放。
 

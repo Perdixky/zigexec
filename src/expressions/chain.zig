@@ -3,7 +3,7 @@
 const ex = @import("../root.zig");
 const init = @import("../callbacks/init.zig").init;
 const continuation = @import("../algorithms/let_value.zig");
-const Kind = enum { then, let_value, upon_error, upon_stopped, let_error, let_stopped, starts_on, continues_on, with_stop_token, bulk, repeat_effect, repeat_until };
+const Kind = enum { then, let_value, upon_error, upon_stopped, let_error, let_stopped, starts_on, continues_on, with_stop_token, bulk, repeat, repeat_until };
 
 pub fn Expression(comptime Impl: type) type {
     return struct {
@@ -34,10 +34,13 @@ pub fn Expression(comptime Impl: type) type {
         pub fn letStopped(self: Self, comptime Callback: type, args: anytype) Step(Self, Callback, .let_stopped) {
             return step(self, init(Callback, args), .let_stopped);
         }
-        pub fn repeatEffect(self: Self) Step(Self, void, .repeat_effect) {
-            return step(self, {}, .repeat_effect);
+        /// Compatibility aliases; prefer repeat / repeatUntil.
+        pub const repeatEffect = repeat;
+        pub const repeatEffectUntil = repeatUntil;
+        pub fn repeat(self: Self) Step(Self, void, .repeat) {
+            return step(self, {}, .repeat);
         }
-        pub fn repeatEffectUntil(self: Self) Step(Self, void, .repeat_until) {
+        pub fn repeatUntil(self: Self) Step(Self, void, .repeat_until) {
             return step(self, {}, .repeat_until);
         }
         pub fn startsOn(self: Self, scheduler: anytype) Step(Self, @TypeOf(scheduler), .starts_on) {
@@ -82,8 +85,8 @@ fn Step(comptime Parent: type, comptime State: type, comptime kind: Kind) type {
                 .continues_on => ex.ContinuesOn(S, State),
                 .with_stop_token => ex.WithStopToken(S),
                 .bulk => ex.Bulk(S, State.Callback),
-                .repeat_effect => ex.RepeatEffect(S),
-                .repeat_until => ex.RepeatEffectUntil(S),
+                .repeat => ex.Repeat(S),
+                .repeat_until => ex.RepeatUntil(S),
             };
         }
         pub fn bindInput(self: @This(), input: anytype) Bound(@typeInfo(@TypeOf(input)).pointer.child) {
@@ -102,8 +105,8 @@ fn Step(comptime Parent: type, comptime State: type, comptime kind: Kind) type {
                 .continues_on => parent.continuesOn(self.state),
                 .with_stop_token => parent.withStopToken(self.state),
                 .bulk => parent.bulk(self.state.count, State.Callback, self.state.callback),
-                .repeat_effect => parent.repeatEffect(),
-                .repeat_until => parent.repeatEffectUntil(),
+                .repeat => parent.repeat(),
+                .repeat_until => parent.repeatUntil(),
             };
         }
     });

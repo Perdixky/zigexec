@@ -118,7 +118,8 @@ test "runLoop can be driven on caller thread with manual receiver" {
         }
     };
     var receiver: Receiver = .{ .loop = &loop };
-    var operation = ex.connect(loop.getScheduler().schedule(), &receiver);
+    var operation: ex.Connection(@TypeOf(loop.getScheduler().schedule()), @TypeOf(&receiver)) = undefined;
+    ex.connectInto(&operation, loop.getScheduler().schedule(), &receiver);
     operation.start();
     try testing.expect(!receiver.called);
     loop.run();
@@ -140,15 +141,17 @@ test "pool allocation failures release resources and zero threads is rejected" {
 test "custom sender and scheduler interoperate with free and fluent algorithms" {
     const Custom = struct {
         pub const Values = Ints;
-        pub const Operation = struct {
-            receiver: ex.Receiver(Values),
-            output: Values = .{21},
-            pub fn start(self: *@This()) void {
-                self.receiver.setValue(&self.output);
-            }
-        };
-        pub fn connect(_: @This(), receiver: ex.Receiver(Values)) Operation {
-            return .{ .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                receiver: ex.TypedReceiver(Values, R),
+                output: Values = .{21},
+                pub fn start(self: *@This()) void {
+                    self.receiver.setValue(&self.output);
+                }
+            };
+        }
+        pub fn connectInto(_: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .receiver = .init(receiver) };
         }
     };
     const CustomScheduler = struct {
@@ -197,8 +200,10 @@ test "finish drains jobs queued before run and closes further submissions" {
     var loop: ex.RunLoop = .{};
     var left: Capture = .{};
     var right: Capture = .{};
-    var first = ex.connect(ex.just(.{1}).startsOn(loop.getScheduler()), &left);
-    var second = ex.connect(ex.just(.{2}).startsOn(loop.getScheduler()), &right);
+    var first: ex.Connection(@TypeOf(ex.just(.{1}).startsOn(loop.getScheduler())), @TypeOf(&left)) = undefined;
+    ex.connectInto(&first, ex.just(.{1}).startsOn(loop.getScheduler()), &left);
+    var second: ex.Connection(@TypeOf(ex.just(.{2}).startsOn(loop.getScheduler())), @TypeOf(&right)) = undefined;
+    ex.connectInto(&second, ex.just(.{2}).startsOn(loop.getScheduler()), &right);
     first.start();
     second.start();
     loop.finish();

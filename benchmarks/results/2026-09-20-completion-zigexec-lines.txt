@@ -1,0 +1,93 @@
+# To display the perf.data header info, please use --header/--header-only options.
+#
+#
+# Total Lost Samples: 0
+#
+# Samples: 7K of event 'cycles:u'
+# Event count (approx.): 2200607728
+#
+# Overhead  Source:Line        
+# ........  ...................
+#
+    32.67%  sender.zig:29
+    29.30%  context.zig:216
+     4.01%  context.zig:202
+     2.88%  sender.zig:37
+     2.22%  context.zig:0
+     2.16%  submission.zig:6
+     2.12%  submission.zig:17
+     1.53%  tcp_echo.zig:30
+     1.48%  context.zig:305
+     1.19%  context.zig:213
+     1.18%  submission.zig:0
+     1.14%  sender.zig:57
+     1.04%  context.zig:284
+     1.02%  context.zig:282
+     1.01%  context.zig:201
+     0.85%  repeat.zig:55
+     0.81%  send_all.zig:28
+     0.81%  ??:0
+     0.78%  context.zig:272
+     0.75%  context.zig:89
+     0.73%  sender.zig:41
+     0.68%  IoUring.zig:228
+     0.61%  repeat.zig:65
+     0.57%  context.zig:93
+     0.44%  repeat.zig:59
+     0.34%  IoUring.zig:145
+     0.32%  submission.zig:20
+     0.30%  context.zig:88
+     0.29%  submission.zig:21
+     0.28%  context.zig:283
+     0.26%  trampoline.zig:55
+     0.24%  context.zig:285
+     0.24%  scope.zig:32
+     0.24%  IoUring.zig:230
+     0.24%  context.zig:309
+     0.23%  submission.zig:23
+     0.23%  IoUring.zig:144
+     0.22%  scope.zig:38
+     0.22%  context.zig:281
+     0.17%  repeat.zig:0
+     0.16%  context.zig:301
+     0.16%  repeat.zig:60
+     0.16%  sender.zig:51
+     0.15%  sender.zig:31
+     0.15%  context.zig:203
+     0.15%  transform.zig:45
+     0.14%  repeat.zig:38
+     0.14%  send_all.zig:38
+     0.13%  request.zig:21
+     0.13%  repeat.zig:53
+     0.12%  context.zig:214
+     0.12%  completion.zig:5
+     0.12%  submission.zig:27
+     0.11%  trampoline.zig:24
+     0.11%  memcpy.zig:145
+     0.11%  context.zig:296
+     0.11%  io_uring_sqe.zig:69
+     0.11%  IoUring.zig:229
+     0.09%  transform.zig:63
+     0.09%  context.zig:215
+     0.09%  receiver.zig:119
+     0.08%  repeat.zig:76
+     0.08%  trampoline.zig:44
+     0.08%  context.zig:90
+     0.08%  context.zig:295
+     0.07%  let.zig:49
+     0.07%  request.zig:0
+     0.07%  context.zig:302
+     0.07%  trampoline.zig:53
+     0.07%  context.zig:95
+     0.06%  IoUring.zig:143
+     0.06%  let.zig:38
+     0.06%  send_all.zig:37
+     0.06%  memcpy.zig:144
+     0.05%  sender.zig:28
+     0.05%  let.zig:64
+     0.05%  trampoline.zig:43
+
+
+#
+# (Tip: To show IPC for sampling periods use perf record -e '{cycles,instructions}:S' and then browse context)
+#

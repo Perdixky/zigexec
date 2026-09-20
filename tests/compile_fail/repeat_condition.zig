@@ -1,4 +1,4 @@
 const ex = @import("zigexec");
 test {
-    _ = ex.just(.{}).repeatEffectUntil();
+    _ = ex.just(.{}).repeatUntil();
 }

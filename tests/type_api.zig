@@ -188,7 +188,7 @@ test "meta helpers describe operations and do not execute factories" {
     const S = ex.meta.ReturnOf(Factory.forbidden, .{i64});
     try t.expectEqual(ex.Just(.{i64}), S);
     try t.expectEqual(ex.Values(.{i64}), ex.meta.ValuesOf(S));
-    try t.expectEqual(S.Operation, ex.meta.OperationOf(S));
+    try t.expectEqual(S.Operation(ex.Receiver(S.Values)), ex.meta.OperationOf(S, ex.Receiver(S.Values)));
     const result: ex.meta.WaitResult(S) = ex.just(.{42}).syncWait(.{ .allocator = std.testing.allocator });
     try t.expectEqual(42, (try result).?[0]);
 }

@@ -15,16 +15,31 @@ fn AllValues(comptime Senders: type) type {
     return @Tuple(&types);
 }
 
-fn ChildTuple(comptime Senders: type, comptime results: bool) type {
+fn ChildTuple(comptime Senders: type, comptime Parent: type, comptime results: bool) type {
     const fields = @typeInfo(Senders).@"struct".field_types;
     var types: [fields.len]type = undefined;
-    for (fields, 0..) |f, i| types[i] = if (results) c.CompletionRef(f.Values) else f.Operation;
+    for (fields, 0..) |f, i| types[i] = if (results) c.CompletionRef(f.Values) else c.OperationOf(f, Parent.Child(i));
     return @Tuple(&types);
 }
 
 pub fn WhenAll(comptime Senders: type) type {
     const V = AllValues(Senders);
     const count = @typeInfo(Senders).@"struct".field_types.len;
+    // Like stdexec's zero/single-input overloads: no fan-in, no private stop
+    // source, no result copy, and no arrival atomics are needed here.
+    if (count <= 1) return struct {
+        senders: Senders,
+        const Base = if (count == 1) @typeInfo(Senders).@"struct".field_types[0] else @import("../senders/immediate.zig").ImmediateKind(V, .value);
+        pub const Values = V;
+        pub const can_error = @import("../detail/completion_traits.zig").canError(Base);
+        pub fn Operation(comptime R: type) type {
+            return c.OperationOf(Base, R);
+        }
+        pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+            const base: Base = if (count == 1) self.senders[0] else .{ .result = .{ .value = .{} } };
+            c.connectChild(out, base, receiver);
+        }
+    };
     return struct {
         senders: Senders,
         pub const Values = V;
@@ -35,87 +50,81 @@ pub fn WhenAll(comptime Senders: type) type {
             break :blk false;
         };
         const Self = @This();
-        pub const Operation = struct {
-            senders: Senders,
-            receiver: c.Receiver(V),
-            children: ChildTuple(Senders, false) = undefined,
-            output: V = undefined,
-            results: ChildTuple(Senders, true) = undefined,
-            stop: c.StopSource = .{},
-            parent_stop: c.StopCallback = .{},
-            // The extra reference prevents inline completion from destroying us
-            // while the loop is still starting other children.
-            remaining: std.atomic.Value(usize) = .init(count + 1),
-            first_error: std.atomic.Value(usize) = .init(count),
-            started: bool = false,
-            const Op = @This();
-            pub fn start(self: *Op) void {
-                std.debug.assert(!self.started);
-                self.started = true;
-                self.parent_stop.init(self.receiver.env.stop_token, self, requestStop);
-                inline for (self.senders, 0..) |sender, i| {
-                    const Child = struct {
-                        fn value(ctx: *anyopaque, values: *const @TypeOf(sender).Values) void {
-                            const op: *Op = @ptrCast(@alignCast(ctx));
-                            op.results[i] = .{ .value = values };
-                            op.finishOne();
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                receiver: c.TypedReceiver(V, R),
+                children: ChildTuple(Senders, Op, false) = undefined,
+                output: V = undefined,
+                results: ChildTuple(Senders, Op, true) = undefined,
+                stop: c.StopSource = .{},
+                parent_stop: c.StopCallbackFor(R) = .{},
+                // The extra reference prevents inline completion from destroying us
+                // while the loop is still starting other children.
+                remaining: std.atomic.Value(usize) = .init(count + 1),
+                first_error: std.atomic.Value(usize) = .init(count),
+                started: bool = false,
+                const Op = @This();
+                pub fn start(self: *Op) void {
+                    std.debug.assert(!self.started);
+                    self.started = true;
+                    self.parent_stop.init(self.receiver.getEnv().stop_token, self, requestStop);
+                    inline for (&self.children) |*child| child.start();
+                    self.finishOne();
+                }
+                fn Child(comptime i: usize) type {
+                    const S = @typeInfo(Senders).@"struct".field_types[i];
+                    return struct {
+                        op: *Op,
+                        pub fn getEnv(self: @This()) c.Env {
+                            return self.op.receiver.getEnv().withStopToken(self.op.stop.token());
                         }
-                        fn err(ctx: *anyopaque, e: anyerror) void {
-                            const op: *Op = @ptrCast(@alignCast(ctx));
-                            op.results[i] = .{ .err = e };
-                            _ = op.first_error.cmpxchgStrong(count, i, .monotonic, .monotonic);
-                            _ = op.stop.requestStop();
-                            op.finishOne();
+                        pub fn setValue(self: @This(), values: *const S.Values) void {
+                            self.op.results[i] = .{ .value = values };
+                            self.op.finishOne();
                         }
-                        fn stopped(ctx: *anyopaque) void {
-                            const op: *Op = @ptrCast(@alignCast(ctx));
-                            op.results[i] = .stopped;
-                            _ = op.stop.requestStop();
-                            op.finishOne();
+                        pub fn setError(self: @This(), e: anyerror) void {
+                            self.op.results[i] = .{ .err = e };
+                            _ = self.op.first_error.cmpxchgStrong(count, i, .monotonic, .monotonic);
+                            _ = self.op.stop.requestStop();
+                            self.op.finishOne();
+                        }
+                        pub fn setStopped(self: @This()) void {
+                            self.op.results[i] = .stopped;
+                            _ = self.op.stop.requestStop();
+                            self.op.finishOne();
                         }
                     };
-                    self.children[i] = sender.connect(.{
-                        .context = self,
-                        .value_fn = Child.value,
-                        .error_fn = Child.err,
-                        .stopped_fn = Child.stopped,
-                        .env = self.receiver.env.withStopToken(self.stop.token()),
-                    });
                 }
-                inline for (&self.children) |*child| child.start();
-                self.finishOne();
-            }
-            fn requestStop(ctx: *anyopaque) void {
-                const self: *Op = @ptrCast(@alignCast(ctx));
-                const scope = self.receiver.env.scope;
-                c.Scope.acquire(scope);
-                defer c.Scope.release(scope);
-                if (!retainUnlessDone(&self.remaining)) return;
-                _ = self.stop.requestStop();
-                self.finishOne();
-            }
-            fn finishOne(self: *Op) void {
-                if (self.remaining.fetchSub(1, .acq_rel) != 1) return;
-                self.parent_stop.deinit();
-                self.stop.deinit();
-                // Acquire all child writes before inspecting their independent slots.
-                const first_error = self.first_error.load(.monotonic);
-                inline for (self.results, 0..) |result, i| {
-                    if (first_error == i) return self.receiver.setError(result.err);
+                fn requestStop(ctx: *anyopaque) void {
+                    const self: *Op = @ptrCast(@alignCast(ctx));
+                    if (!retainUnlessDone(&self.remaining)) return;
+                    _ = self.stop.requestStop();
+                    self.finishOne();
                 }
-                inline for (self.results) |result| {
-                    if (result == .stopped) return self.receiver.setStopped();
+                fn finishOne(self: *Op) void {
+                    if (self.remaining.fetchSub(1, .acq_rel) != 1) return;
+                    self.parent_stop.deinit();
+                    self.stop.deinit();
+                    // Acquire all child writes before inspecting their independent slots.
+                    const first_error = self.first_error.load(.monotonic);
+                    inline for (self.results, 0..) |result, i| {
+                        if (first_error == i) return self.receiver.setError(result.err);
+                    }
+                    inline for (self.results) |result| {
+                        if (result == .stopped) return self.receiver.setStopped();
+                    }
+                    comptime var offset = 0;
+                    inline for (self.results) |result| {
+                        inline for (result.value.*, 0..) |v, j| self.output[offset + j] = v;
+                        offset += @typeInfo(@TypeOf(result.value.*)).@"struct".field_types.len;
+                    }
+                    self.receiver.setValue(&self.output);
                 }
-                comptime var offset = 0;
-                inline for (self.results) |result| {
-                    inline for (result.value.*, 0..) |v, j| self.output[offset + j] = v;
-                    offset += @typeInfo(@TypeOf(result.value.*)).@"struct".field_types.len;
-                }
-                self.receiver.setValue(&self.output);
-            }
-        };
-        pub fn connect(self: Self, receiver: c.Receiver(V)) Operation {
-            return .{ .senders = self.senders, .receiver = receiver };
+            };
+        }
+        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
+            out.* = .{ .receiver = .init(receiver) };
+            inline for (self.senders, 0..) |sender, i| c.connectChild(&out.children[i], sender, Operation(@TypeOf(receiver)).Child(i){ .op = out });
         }
     };
 }

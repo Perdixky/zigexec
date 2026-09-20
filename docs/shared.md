@@ -29,7 +29,7 @@ does not need a destructor.
 
 The first start also acquires a distinct upstream reference. This permits all
 explicit owners to be released after subscription, a root receiver to destroy
-its connection in `setFinished`, re-subscription from completion callbacks,
+its connection in completion, re-subscription from completion callbacks,
 and release of the final owner from a completion callback.
 
 `deinit()` only releases ownership; it does not request cancellation. Use
@@ -48,8 +48,8 @@ directly. Active subscribers are normally notified on the upstream completion
 thread; late ones may complete on their starting thread. Use `continuesOn` to
 choose an explicit downstream location.
 
-The shared upstream owns a root `Connection` and releases its execution
-reference only after all execution entries exit. Its result is cached, then
+The shared upstream owns a root `Connection` and releases its ownership
+reference after notifying all subscribers, as its final completion action. Its result is cached, then
 copied into each subscription operation. Downstream nodes borrow that
 subscription-local result and do not depend on the owner remaining alive.
 Pointers and slices are still shallow copies; external resources remain

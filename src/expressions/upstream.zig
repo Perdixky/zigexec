@@ -22,15 +22,17 @@ fn Borrowed(comptime V: type) type {
         input: *const V,
         pub const Values = V;
         pub const can_error = false;
-        pub const Operation = struct {
-            input: *const V,
-            receiver: ex.Receiver(V),
-            pub fn start(self: *@This()) void {
-                self.receiver.setValue(self.input);
-            }
-        };
-        pub fn connect(self: @This(), receiver: ex.Receiver(V)) Operation {
-            return .{ .input = self.input, .receiver = receiver };
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                input: *const V,
+                receiver: ex.TypedReceiver(V, R),
+                pub fn start(self: *@This()) void {
+                    self.receiver.setValue(self.input);
+                }
+            };
+        }
+        pub fn connectInto(self: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .input = self.input, .receiver = .init(receiver) };
         }
     };
 }
