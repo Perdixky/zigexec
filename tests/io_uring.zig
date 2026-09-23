@@ -609,3 +609,66 @@ test "reactor local scheduler submissions defer to the next batch without a wake
     state.done.wait();
     try t.expectEqual(10_000, state.calls);
 }
+
+test "both ring modes perform I/O, cancel in flight, and drain non-cancellable work on shutdown" {
+    for ([_]bool{ true, false }) |defer_taskrun| {
+        const context = try ex.IoUring.init(t.allocator, .{ .entries = 2, .defer_taskrun = defer_taskrun });
+        defer context.deinit();
+        var sockets: [2]i32 = undefined;
+        try checked(linux.socketpair(linux.AF.UNIX, linux.SOCK.STREAM | linux.SOCK.CLOEXEC, 0, &sockets));
+        defer _ = linux.close(sockets[0]);
+        defer _ = linux.close(sockets[1]);
+
+        var buffer: [4]u8 = undefined;
+        const echoed = (try ex.whenAll(.{
+            ex.io.recv(context, sockets[0], &buffer, 0),
+            ex.io.send(context, sockets[1], "ping", 0),
+        }).syncWait(.{})).?;
+        try t.expectEqual(4, echoed[0]);
+        try t.expectEqualStrings("ping", &buffer);
+
+        // In flight, cancellable: reaches the kernel through the active list.
+        var source: ex.StopSource = .{};
+        defer source.deinit();
+        const Cancel = struct {
+            source: *ex.StopSource,
+            pub fn call(self: @This()) void {
+                _ = self.source.requestStop();
+            }
+        };
+        try t.expectEqual(null, try ex.whenAll(.{
+            ex.io.recv(context, sockets[0], &buffer, 0).withStopToken(source.token()),
+            ex.io.sleepFor(context, std.time.ns_per_ms).then(Cancel, .{ .source = &source }),
+        }).syncWait(.{}));
+
+        // In flight, not cancellable (unstoppable env): only shutdown's single
+        // cancel-all can reach it, since it never joins the active list.
+        const Receiver = struct {
+            done: Event = .{},
+            stopped: bool = false,
+            pub fn getEnv(_: *@This()) ex.UnstoppableEnv {
+                return .{};
+            }
+            pub fn setValue(self: *@This(), _: *const @Tuple(&.{usize})) void {
+                self.done.set();
+            }
+            pub fn setError(self: *@This(), _: anyerror) void {
+                self.done.set();
+            }
+            pub fn setStopped(self: *@This()) void {
+                self.stopped = true;
+                self.done.set();
+            }
+        };
+        var receiver: Receiver = .{};
+        const pending = ex.io.recv(context, sockets[0], &buffer, 0);
+        var operation: ex.Connection(@TypeOf(pending), *Receiver) = undefined;
+        ex.connectInto(&operation, pending, &receiver);
+        operation.start();
+        // Submitted in the same reactor batch as, and before, this nop.
+        _ = try context.getScheduler().schedule().syncWait(.{});
+        context.shutdown();
+        receiver.done.wait();
+        try t.expect(receiver.stopped);
+    }
+}

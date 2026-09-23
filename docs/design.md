@@ -179,8 +179,13 @@ final notification. See [cancellation](cancellation.md).
 location. `continuesOn` retains a completion, schedules, then forwards it;
 scheduler error or stopped replaces the retained result.
 
-`ThreadPool` allocates its context and thread array once, while queue nodes
-live in operations. `RunLoop.finish` drains existing submissions and rejects
+`ThreadPool` allocates its context, thread array, and per-worker queues once,
+while task nodes live in operations. Each worker owns a bounded FIFO ring:
+submissions from a worker go to its own ring without locking, idle workers
+steal half of another worker's ring, and submissions from other threads (or a
+full ring) use one locked injection queue. A push wakes a sleeping worker only
+when none is already searching. `close()` rejects new submissions; `deinit()`
+runs every accepted task before joining. `RunLoop.finish` drains existing submissions and rejects
 new ones. A downstream reschedule during shutdown can therefore fail; normal
 shutdown first waits for the root sender.
 

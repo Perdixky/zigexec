@@ -1,4 +1,5 @@
 const std = @import("std");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const retainUnlessDone = @import("../detail/lifetime.zig").retainUnlessDone;
 const c = @import("../execution/protocol.zig");
 fn AllValues(comptime Senders: type) type {
@@ -62,7 +63,7 @@ pub fn WhenAll(comptime Senders: type) type {
                 // while the loop is still starting other children.
                 remaining: std.atomic.Value(usize) = .init(count + 1),
                 first_error: std.atomic.Value(usize) = .init(count),
-                started: bool = false,
+                started: StartGuard = .{},
                 const Op = @This();
                 pub fn cleanup(self: *Op, continuation: anytype) void {
                     var children: ChildPointers() = undefined;
@@ -77,8 +78,7 @@ pub fn WhenAll(comptime Senders: type) type {
                     return @Tuple(&pointers);
                 }
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.parent_stop.init(self.receiver.getEnv().stop_token, self, requestStop);
                     inline for (&self.children) |*child| child.start();
                     self.finishOne();

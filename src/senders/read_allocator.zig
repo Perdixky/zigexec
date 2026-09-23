@@ -1,4 +1,5 @@
 const std = @import("std");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const c = @import("../execution/protocol.zig");
 
 /// Query lazily, after connection to the final receiver's execution environment.
@@ -8,10 +9,9 @@ pub const ReadAllocator = struct {
         return struct {
             receiver: c.TypedReceiver(Values, R),
             output: Values = undefined,
-            started: bool = false,
+            started: StartGuard = .{},
             pub fn start(self: *@This()) void {
-                std.debug.assert(!self.started);
-                self.started = true;
+                self.started.begin();
                 const allocator = self.receiver.getEnv().getAllocator() catch |err| return self.receiver.setError(err);
                 self.output = .{allocator};
                 self.receiver.setValue(&self.output);

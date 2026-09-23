@@ -58,23 +58,30 @@ def main():
 
     metrics = ["cycles:u", "instructions:u", "cycles:k", "instructions:k",
                "syscalls:sys_enter_io_uring_enter", "branch-misses:u", "cache-misses:u"]
-    libraries = archive["profile"]["manifest"]["config"]["libraries"].split(",")
-    lines = [
-        "# 64 B / 256 connections: perf stat per validated echo",
-        "",
-        "Three 10-second trials per binary; 2-second warmup. Values are medians of normalized counters. Kernel counters include interrupt work charged during the task, not just process system CPU.",
-        "",
-        "| Library | " + " | ".join(metrics) + " |",
-        "|---|" + "---:|" * len(metrics),
-    ]
-    for library in libraries:
-        values = []
-        selected = [run for run in runs if run["metadata"]["library"] == library]
-        for metric in metrics:
-            median = statistics.median(run["counts"][metric]["per_echo"] for run in selected)
-            values.append(f"{median:.4f}" if metric.startswith("syscalls:") else f"{median:.2f}")
-        lines.append(f"| {library} | " + " | ".join(values) + " |")
-    args.markdown.write_text("\n".join(lines) + "\n")
+    config = archive["profile"]["manifest"]["config"]
+    libraries = config["libraries"].split(",")
+    scenarios = sorted({(run["metadata"]["bytes"], run["metadata"]["connections"]) for run in runs})
+    lines = []
+    for size, connections in scenarios:
+        scenario_runs = [run for run in runs if (run["metadata"]["bytes"], run["metadata"]["connections"]) == (size, connections)]
+        trials = len(scenario_runs) // len(libraries)
+        lines += [
+            f"# {size} B / {connections} connections: perf stat per validated echo",
+            "",
+            f"{trials} trials per binary; {config['warmup']:g}-second warmup and {config['seconds']:g}-second measurement. Values are medians of normalized counters. Kernel counters include interrupt work charged during the task, not just process system CPU.",
+            "",
+            "| Library | " + " | ".join(metrics) + " |",
+            "|---|" + "---:|" * len(metrics),
+        ]
+        for library in libraries:
+            values = []
+            selected = [run for run in scenario_runs if run["metadata"]["library"] == library]
+            for metric in metrics:
+                median = statistics.median(run["counts"][metric]["per_echo"] for run in selected)
+                values.append(f"{median:.4f}" if metric.startswith("syscalls:") else f"{median:.2f}")
+            lines.append(f"| {library} | " + " | ".join(values) + " |")
+        lines.append("")
+    args.markdown.write_text("\n".join(lines).rstrip() + "\n")
 
 
 if __name__ == "__main__":

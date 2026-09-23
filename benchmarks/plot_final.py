@@ -30,9 +30,10 @@ def save(fig, path):
 def main():
     results = Path(__file__).resolve().parent / "results"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--throughput", type=Path, default=results / "2026-09-20-final.json.gz")
-    parser.add_argument("--perf", type=Path, default=results / "2026-09-20-completion-perf.json.gz")
+    parser.add_argument("--throughput", type=Path, default=results / "2026-09-23-echo.json.gz")
+    parser.add_argument("--perf", type=Path, default=results / "2026-09-23-perf.json.gz")
     parser.add_argument("--output-dir", type=Path, default=results)
+    parser.add_argument("--tag", default="2026-09-23", help="Output filename prefix")
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10,
@@ -61,10 +62,12 @@ def main():
         ax.grid(axis="y", alpha=.16)
         ax.set_axisbelow(True)
     fig.suptitle("Latest TCP echo throughput · Linux loopback · one server core", fontsize=16, weight="bold", y=1.02)
+    date = data["date_utc"].split("T", 1)[0]
+    baseline_commit = data["build"]["baseline"]["commit"][:7]
     fig.text(.5, -.025, "Bars and labels: median. Dots: all five trials. 1 s warmup + 3 s measurement per trial.\n"
-             "Ryzen 5 7500F · ReleaseFast / native · 2026-09-20 · independently restarted, interleaved servers", ha="center", color="#465263")
+             f"Ryzen 5 7500F · ReleaseFast / native · {date} · independently restarted, interleaved servers", ha="center", color="#465263")
     fig.tight_layout()
-    save(fig, args.output_dir / "2026-09-20-final-throughput")
+    save(fig, args.output_dir / f"{args.tag}-throughput")
 
     perf = read_json(args.perf)
     samples = defaultdict(list)
@@ -92,9 +95,9 @@ def main():
         ax.set_axisbelow(True)
     fig.suptitle("User-space CPU cost · 64 B / 256 connections", fontsize=16, weight="bold", y=1.04)
     fig.text(.5, -.08, "Independent perf batch: three trials, 2 s warmup + 10 s measurement. Dots: all trials; bars: median.\n"
-             "Scaled hardware counters; server task only. Baseline: published commit 71ab83b.", ha="center", color="#465263")
+             f"Scaled hardware counters; server task only. Baseline: published commit {baseline_commit}.", ha="center", color="#465263")
     fig.tight_layout()
-    save(fig, args.output_dir / "2026-09-20-final-user-cost")
+    save(fig, args.output_dir / f"{args.tag}-user-cost")
 
 
 if __name__ == "__main__":

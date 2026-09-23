@@ -1,12 +1,15 @@
 const traits = @import("../detail/completion_traits.zig");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
-const starts_on = @import("starts_on.zig");
+const Task = @import("../detail/task.zig").Task;
 const Trampoline = @import("../schedulers/trampoline.zig").TrampolineScheduler;
 
-/// Like stdexec repeat_until: connect a trampoline-scheduled child, clean it up
-/// on completion, then reconnect/start for another round or forward the terminal
-/// result. The receiver environment is forwarded without an iteration scope.
+/// Like stdexec repeat_until: start each round through the trampoline, clean
+/// the child up on completion, then reconnect/start another round or forward
+/// the terminal result. The receiver environment is forwarded without an
+/// iteration scope. The round's task is embedded here instead of connecting a
+/// startsOn(trampoline) wrapper, so a round builds no per-round scheduler op.
 pub fn Repeat(comptime S: type, comptime until: bool) type {
     const fields = @typeInfo(S.Values).@"struct".field_types;
     if (until) {
@@ -14,7 +17,6 @@ pub fn Repeat(comptime S: type, comptime until: bool) type {
             @compileError("zigexec.repeatUntil: expected one bool completion value; true finishes, false repeats");
     } else if (fields.len != 0)
         @compileError("zigexec.repeat: expected an empty completion tuple; use then to discard values");
-    const Bouncy = starts_on.StartsOn(Trampoline, S);
     return struct {
         sender: S,
         pub const Values = @Tuple(&.{});
@@ -24,16 +26,17 @@ pub fn Repeat(comptime S: type, comptime until: bool) type {
             return struct {
                 sender: S,
                 receiver: c.TypedReceiver(Values, R),
-                child: c.OperationOf(Bouncy, *Op) = undefined,
-                started: bool = false,
-                child_connected: bool = true,
+                task: Task = .{ .run = execute },
+                child: c.OperationOf(S, *Op) = undefined,
+                started: StartGuard = .{},
+                child_connected: bool = false,
                 const Op = @This();
                 const Action = struct {
                     op: *Op,
                     result: union(enum) { again, value, err: anyerror, stopped },
                     pub fn run(self: @This()) void {
                         switch (self.result) {
-                            .again => self.op.restart(),
+                            .again => self.op.schedule(),
                             .value => self.op.receiver.setValue(&.{}),
                             .err => |err| self.op.receiver.setError(err),
                             .stopped => self.op.receiver.setStopped(),
@@ -41,9 +44,8 @@ pub fn Repeat(comptime S: type, comptime until: bool) type {
                     }
                 };
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
-                    self.child.start();
+                    self.started.begin();
+                    self.schedule();
                 }
                 pub fn getEnv(self: *Op) c.EnvOf(R) {
                     return self.receiver.getEnv();
@@ -53,9 +55,19 @@ pub fn Repeat(comptime S: type, comptime until: bool) type {
                     self.child_connected = false;
                     c.cleanupOperation(&self.child, continuation);
                 }
-                fn restart(self: *Op) void {
-                    c.connectChild(&self.child, starts_on.startsOn(Trampoline{}, self.sender), self);
-                    self.child_connected = true;
+                fn schedule(self: *Op) void {
+                    (Trampoline{}).submit(&self.task) catch |err| switch (err) {};
+                }
+                fn execute(task: *Task) void {
+                    const self: *Op = @fieldParentPtr("task", task);
+                    // Stop is observed before every round, including the first,
+                    // whose child was connected eagerly and still needs cleanup.
+                    if (self.receiver.getEnv().stop_token.stopRequested())
+                        return self.cleanup(Action{ .op = self, .result = .stopped });
+                    if (!self.child_connected) {
+                        c.connectChild(&self.child, self.sender, self);
+                        self.child_connected = true;
+                    }
                     self.child.start(); // Completion may reconnect child or destroy self.
                 }
                 pub fn setValue(self: *Op, values: *const S.Values) void {
@@ -70,9 +82,11 @@ pub fn Repeat(comptime S: type, comptime until: bool) type {
                 }
             };
         }
-        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
-            out.* = .{ .sender = self.sender, .receiver = .init(receiver) };
-            c.connectChild(&out.child, starts_on.startsOn(Trampoline{}, self.sender), out);
+        pub fn connectInto(self: Self, out: anytype, r: anytype) void {
+            // Like stdexec, the first child is connected with the repeat itself.
+            out.* = .{ .sender = self.sender, .receiver = .init(r) };
+            c.connectChild(&out.child, self.sender, out);
+            out.child_connected = true;
         }
     };
 }

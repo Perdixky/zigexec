@@ -108,6 +108,21 @@ pub fn build(b: *std.Build) void {
     const run_echo = b.addRunArtifact(echo_example);
     run_echo.addPassthruArgs();
     b.step("run-echo", "Run the io_uring TCP echo server ([port] [--once])").dependOn(&run_echo.step);
+    const micro = b.addExecutable(.{
+        .name = "zigexec-micro",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("benchmarks/micro.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "zigexec", .module = mod }},
+        }),
+    });
+    const install_micro = b.addInstallArtifact(micro, .{});
+    const run_micro = b.addRunArtifact(micro);
+    run_micro.addPassthruArgs();
+    const bench = b.step("bench", "Run CPU-bound microbenchmarks (use -Doptimize=ReleaseFast)");
+    bench.dependOn(&install_micro.step);
+    bench.dependOn(&run_micro.step);
     const echo_test = b.addSystemCommand(&.{ "python3", "tests/tcp_echo.py" });
     echo_test.addArtifactArg(echo_example);
     const echo_unit = b.addTest(.{

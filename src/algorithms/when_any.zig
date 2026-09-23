@@ -1,4 +1,5 @@
 //! First completion wins; cancel peers and retire every branch before forwarding.
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const std = @import("std");
 const ex = @import("../root.zig");
 const retainUnlessDone = @import("../detail/lifetime.zig").retainUnlessDone;
@@ -52,7 +53,7 @@ pub fn WhenAny(comptime Senders: type) type {
                 remaining: std.atomic.Value(usize) = .init(count + 1),
                 winner: std.atomic.Value(usize) = .init(count),
                 result: ex.Completion(Values) = undefined,
-                started: bool = false,
+                started: StartGuard = .{},
                 const Op = @This();
                 pub fn cleanup(self: *Op, continuation: anytype) void {
                     var children: ChildPointers() = undefined;
@@ -67,8 +68,7 @@ pub fn WhenAny(comptime Senders: type) type {
                     return @Tuple(&pointers);
                 }
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.parent_stop.init(self.receiver.getEnv().stop_token, self, cancel);
                     inline for (&self.children) |*child| child.start();
                     self.finishOne();

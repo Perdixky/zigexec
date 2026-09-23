@@ -17,4 +17,5 @@ test {
     _ = @import("algorithms.zig");
     _ = @import("scheduling.zig");
     _ = @import("cancellation.zig");
+    _ = @import("thread_pool.zig");
 }

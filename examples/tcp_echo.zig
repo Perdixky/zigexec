@@ -40,12 +40,14 @@ const PeerError = struct {
 };
 // Only the reactor accesses the list and operations. No CountingScope, spawn,
 // per-client stop source, or extra scheduling hop is needed for dispatch.
+// Every echo touches the operation and the Echo header (context/socket), so
+// they are kept adjacent; the 16 KiB buffer (Echo's last field) goes last.
 const Client = struct {
     server: *Server,
     previous: ?*Client = null,
     next: ?*Client = null,
-    echo: Echo,
     operation: ex.Connection(Echo.Loop, *Client) = undefined,
+    echo: Echo,
 
     pub fn getEnv(_: *Client) ex.UnstoppableEnv {
         return .{};

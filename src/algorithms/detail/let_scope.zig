@@ -1,5 +1,6 @@
 //! Bind a lexical expression to stored inputs, or sequence an already-constructed
 //! sender. A concrete sender does not consume the predecessor's completion values.
+const StartGuard = @import("../../detail/start_guard.zig").StartGuard;
 const traits = @import("../../detail/completion_traits.zig");
 const std = @import("std");
 const c = @import("../../execution/protocol.zig");
@@ -30,7 +31,7 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
                 receiver: c.TypedReceiver(Values, R),
                 child: c.OperationOf(S, *Op) = undefined,
                 next: c.OperationOf(Next, c.TypedReceiver(Values, R)) = undefined,
-                started: bool = false,
+                started: StartGuard = .{},
                 next_connected: bool = false,
                 const Op = @This();
                 pub fn cleanup(self: *Op, continuation: anytype) void {
@@ -40,8 +41,7 @@ pub fn Scope(comptime S: type, comptime Body: type) type {
                         c.cleanupOperation(&self.child, continuation);
                 }
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.child.start();
                 }
                 pub fn getEnv(self: *Op) c.EnvOf(R) {

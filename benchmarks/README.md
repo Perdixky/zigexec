@@ -1,12 +1,28 @@
 # zigexec / libxev / zio TCP benchmark
 
-最终优化后的六场景对比、perf、内存布局及结论见
-[最终性能报告（2026-09-20）](PERFORMANCE.zh-CN.md)。其余阶段报告保留为历史记录。
+最新六场景对比、perf、内存布局、微基准及结论见
+[性能报告（2026-09-23）](PERFORMANCE.zh-CN.md)。其余阶段报告保留为历史记录。
 
 这是 Linux loopback TCP 的端到端对比，不是所有异步工作负载的综合排名。
 测试对象是 zigexec 的现有 TCP echo 示例、libxev 的公开 TCP watcher API，以及
 `lalinsky/zio` 的完整协程运行时。三个服务端都执行 `recv → 完整回写 → recv`，
 每条连接一个 16 KiB 缓冲区，支持短读、短写和 EOF，不做逐请求日志。
+
+## 微基准（框架自身开销）
+
+TCP echo 的服务端 CPU 未饱和，主要成本在内核 loopback 与客户端，难以区分库的差异。
+`benchmarks/micro.zig` 不经过网络协议栈，直接测量 sync_wait、repeat、whenAll、
+RunLoop/ThreadPool 调度以及 io_uring nop 循环（附手写 io_uring 精简实现对照）：
+
+```sh
+zig build bench -Doptimize=ReleaseFast -Dcpu=native            # 全部
+zig build bench -Doptimize=ReleaseFast -Dcpu=native -- io_uring # 按名称过滤
+```
+
+每行为 7 次运行的中位数（ns/op）；[本机完整结果](results/2026-09-23-micro.md)
+包含所有项目和样本范围。可配合
+`perf stat -e cycles:u,instructions:u zig-out/bin/zigexec-micro <filter>`
+观察整段运行的用户态计数。
 
 ## 复现
 
@@ -50,9 +66,11 @@ python3 benchmarks/run.py --libraries zigexec --scenarios 64:1,4096:32
 - 一个服务端占用一个物理核。最终 zigexec 的主线程在 RunLoop 中等待最终排空，实际 I/O
   由一个 reactor 线程处理；libxev 一个 loop；zio 一个 executor。辅助线程也继承
   相同的 CPU affinity。没有用 zio 默认配置以外的忙轮询或关闭调度指标等优化。
-- 三者强制使用 io_uring；不允许失败后悄悄回退 epoll。zigexec 保持原示例的
-  64 个 SQ entries，libxev 显式设为 64。zio Runtime 没有暴露 ring 大小设置，
-  使用其默认 256。SQ 大小不是连接数/在途请求数上限，这项配置差异仍需披露。
+- 三者强制使用 io_uring；不允许失败后悄悄回退 epoll。zigexec 使用 64 个
+  SQ entries，默认请求 SINGLE_ISSUER、DEFER_TASKRUN、COOP_TASKRUN；若内核拒绝
+  这些 flags，则回退为无 flags 的 io_uring。已发布基线和 libxev 使用无 flags
+  的 64-entry ring。zio Runtime 使用默认 256-entry ring。SQ 大小不是连接数
+  或在途请求数的上限；这些配置差异会影响性能。
 - 客户端用原生 C + epoll；Python 只负责启动、同步和收集结果。连接数为 1 时
   一个负载进程，其他默认场景使用四个进程。所有连接在计时前建立，统一起跑，
   先预热 1 秒，再测 3 秒，每个场景 5 次。服务器在每次试验中重新启动。
@@ -98,7 +116,7 @@ libxev 使用 Zig 0.16，另外两者使用 0.17；不同编译器/标准库是�
 ## 优化前后同批比较
 
 ```sh
-python3 benchmarks/build.py --baseline-ref 7da66f5acb89794366734bf25188a932030e6363
+python3 benchmarks/build.py --baseline-ref 69bc11b80db0b8ac4dc63fe748ac35b81a696cc7
 python3 benchmarks/run.py --libraries baseline,zigexec,libxev,zio \
   --output benchmarks/results/local-optimized.json
 ```
@@ -126,7 +144,7 @@ python3 benchmarks/diagnose.py --seconds 2 --warmup 0.5 --repetitions 5
 
 `python3 benchmarks/layout.py` 会在缓存目录生成布局探针，直接复用真实 echo
 示例的类型，报告 sender、operation、Connection 和 spawn 节点的静态字节数。
-结果见 [布局记录](results/2026-09-19-layout.txt)；它不等同于 RSS。
+当前结果见 [布局记录](results/2026-09-23-layout.txt)；它不等同于 RSS。
 
 已记录的本机结果及分析见 [2026-09-19 报告](REPORT.zh-CN.md)，
 逐场景完整表见 [结果表](results/2026-09-19-ryzen7500f.md)，
@@ -139,8 +157,8 @@ python3 benchmarks/diagnose.py --seconds 2 --warmup 0.5 --repetitions 5
 
 ## perf 剖析
 
-优化后版本的硬件计数器、内核/用户态采样、热点解释与复现命令见
-[2026-09-20 perf 分析](PERF.zh-CN.md)。`profile.py` 只剖析已有构建产物，
+最新硬件计数见 [2026-09-23 perf 统计](results/2026-09-23-perf.md)；
+历史热点采样与解释见 [2026-09-20 perf 分析](PERF.zh-CN.md)。`profile.py` 只剖析已有构建产物，
 不修改库源码或内核配置；通过 FIFO 把 perf 事件限定在稳态计时窗口。
 
 

@@ -1,4 +1,5 @@
 const std = @import("std");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const c = @import("../execution/protocol.zig");
 pub fn Immediate(comptime V: type) type {
     return ImmediateKind(V, null);
@@ -13,10 +14,9 @@ pub fn ImmediateKind(comptime V: type, comptime channel: ?enum { value, err, sto
             return struct {
                 receiver: c.TypedReceiver(V, R),
                 result: c.Completion(V),
-                started: bool = false,
+                started: StartGuard = .{},
                 pub fn start(self: *@This()) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.receiver.complete(&self.result);
                 }
             };

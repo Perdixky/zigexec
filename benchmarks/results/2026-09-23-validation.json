@@ -1,0 +1,27 @@
+{
+  "validated_at_utc": "2026-09-23T02:55:30Z",
+  "baseline_commit": "69bc11b80db0b8ac4dc63fe748ac35b81a696cc7",
+  "trials": 120,
+  "scenario_library_groups": 24,
+  "trials_per_group": 5,
+  "total_validated_echoes": 87229687,
+  "client_histogram_totals_match": true,
+  "source_hashes_match_build": true,
+  "all_binary_hashes_match_perf_batch": true,
+  "perf_runs": 12,
+  "raw_json_sha256": "812a0203f2bf9d209644e9458778e629c07e52db603af458d67f48619d26483c",
+  "echo_gzip_sha256": "2f8b41eee830a93dc1fb78a3aaa40bbd544a666573679537743c11a8ec62449b",
+  "perf_gzip_sha256": "41cd528a489e97d5e86d55ad354ef822ab5b89865746dd676af3621b33c13403",
+  "binary_sha256": {
+    "zigexec-echo": "5e090a966b706858f76a96c439f9f3f69c396e458070ec801f783bbeafa324a3",
+    "zigexec-micro": "15618ab01cf7bd6884eb7d3342522c6746bea3cb1999db02c36d11a21cb986fd"
+  },
+  "checks": {
+    "debug": "zig build test-all test-echo --summary all",
+    "release_fast": "zig build test-all test-echo -Doptimize=ReleaseFast --summary all",
+    "load_generator": "python3 benchmarks/test_load.py",
+    "format": "zig fmt --check build.zig src examples tests benchmarks/micro.zig",
+    "documentation": "local links checked in both READMEs, benchmark README, performance report, and microbenchmark result",
+    "visualization": "both PNG charts rendered and inspected"
+  }
+}

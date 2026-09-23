@@ -1,4 +1,5 @@
 const std = @import("std");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const c = @import("../execution/protocol.zig");
 pub const ReadEnv = struct {
     pub const can_error = false;
@@ -7,10 +8,9 @@ pub const ReadEnv = struct {
         return struct {
             receiver: c.TypedReceiver(Values, R),
             output: Values = undefined,
-            started: bool = false,
+            started: StartGuard = .{},
             pub fn start(self: *@This()) void {
-                std.debug.assert(!self.started);
-                self.started = true;
+                self.started.begin();
                 self.output = .{self.receiver.getEnv().toDynamic()};
                 self.receiver.setValue(&self.output);
             }

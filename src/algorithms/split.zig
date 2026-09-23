@@ -1,4 +1,5 @@
 const std = @import("std");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const c = @import("../execution/protocol.zig");
 const sync = @import("../detail/sync.zig");
 const fluent = @import("../execution/sender.zig");
@@ -79,11 +80,10 @@ pub fn Shared(comptime S: type) type {
                     waiter: Waiter = .{ .notify = notify },
                     result: Result = undefined,
                     stop_callback: c.StopCallbackFor(R) = .{},
-                    started: bool = false,
+                    started: StartGuard = .{},
                     const Op = @This();
                     pub fn start(self: *Op) void {
-                        std.debug.assert(!self.started);
-                        self.started = true;
+                        self.started.begin();
                         const state = self.state;
                         state.retain(); // This subscription owns State until finish.
                         self.stop_callback.init(self.receiver.getEnv().stop_token, self, cancel);

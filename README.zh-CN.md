@@ -282,21 +282,20 @@ operation.start();
 
 [`benchmarks/`](benchmarks/README.md) 提供与 libxev、zio 的 Linux TCP echo
 对比，包含固定依赖版本、原生负载器、吞吐量、RTT、CPU 使用率和原始测量数据。
-最新完整结果见 [最终性能报告](benchmarks/PERFORMANCE.zh-CN.md)，涵盖六场景、perf 与内存布局。
+最新完整结果见 [性能报告](benchmarks/PERFORMANCE.zh-CN.md)，涵盖六场景、perf、内存布局与微基准。
 复现方法与限制见基准说明；[第一轮优化报告](benchmarks/OPTIMIZATION.zh-CN.md) 记录当时的结果及 API 迁移，
 [原始测试报告](benchmarks/REPORT.zh-CN.md) 保留优化前分析。
 这些结果只代表已测的 TCP 工作负载，不是异步库的综合排名。
 
-![六种 TCP echo 工作负载的吞吐对比](benchmarks/results/2026-09-20-final-throughput.svg)
+![六种 TCP echo 工作负载的吞吐对比](benchmarks/results/2026-09-23-throughput.svg)
 
-![64 字节、256 连接时的用户态 CPU 成本](benchmarks/results/2026-09-20-final-user-cost.svg)
+![64 字节、256 连接时的用户态 CPU 成本](benchmarks/results/2026-09-23-user-cost.svg)
 
 柱为中位数，点为每次独立试验。在本次 Ryzen 5 7500F Linux loopback、
-单服务端核测试中，最新 zigexec 六场景吞吐相对 libxev 为 -3.3%～+0.0%。
-相对已发布提交 `71ab83b`，中位数变化为 -1.8%～+0.9%，六个场景的五次样本
-区间均重叠。独立 perf 批次中，cleanup/lifetime 修改使每次 echo 的用户态 cycles
-增加 7.1%、instructions 增加 2.0%。这些数字只适用于报告中的 TCP 配置；
-测试方法、延迟、样本区间和解释边界以最终性能报告为准。
+单服务端核测试中，zigexec 六场景吞吐中位数相对 libxev 为 -1.0%～+1.8%。
+相对已发布提交 `69bc11b`，中位数增加 1.1%～3.3%，其中五组的五次样本范围
+仍重叠。64 B / 256 连接的独立 perf 批次中，用户态 cycles/echo 降低 47.3%，
+instructions/echo 降低 30.1%。测试方法、延迟、微基准及解释边界以性能报告为准。
 
 ## 许可证
 

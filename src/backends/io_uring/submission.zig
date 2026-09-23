@@ -27,8 +27,8 @@ pub fn prepare(sqe: *linux.io_uring_sqe, request: *Request) void {
         .accept => |args| sqe.prep_accept(args.fd, null, null, args.flags),
         .connect => |args| sqe.prep_connect(args.fd, args.address, args.length),
         .sleep => |ns| {
-            request.timeout = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) };
-            sqe.prep_timeout(&request.timeout, 0, 0);
+            request.scratch = .{ .timeout = .{ .sec = @intCast(ns / std.time.ns_per_s), .nsec = @intCast(ns % std.time.ns_per_s) } };
+            sqe.prep_timeout(&request.scratch.timeout, 0, 0);
         },
     }
     // Low bit is reserved for the cancellation CQE referring to the same request.

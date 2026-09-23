@@ -64,11 +64,12 @@ intrusive FIFO drained by that outer call. These limits apply at scheduling
 points, not to stack usage inside a user callback. There is no per-repeat atomic
 work counter.
 
-Following stdexec's `repeat_until`, each child is composed with
-`startsOn(TrampolineScheduler{})`. The first child connects eagerly; completion
-cleans up that child, reconnects the scheduled chain, and starts it again.
-The scheduler checks cancellation before starting each effect, including queued
-iterations. Terminal results forward directly after cleanup.
+Following stdexec's `repeat_until`, every round starts through
+`TrampolineScheduler{}`. The repeat operation embeds the round's scheduler task
+itself rather than connecting a `startsOn` wrapper per round. The first child
+connects eagerly; completion cleans up that child, then the next round
+reconnects and starts it. Cancellation is checked before starting each effect,
+including queued iterations. Terminal results forward directly after cleanup.
 
 There is no iteration `Scope`, resource registry, or execution reference count
 inside repeat. Its receiver forwards the environment unchanged. Cleanup follows
@@ -114,8 +115,9 @@ accept but waits for that Client to retire. Allocation failure closes the new
 fd; accept failure shuts down the context and drains existing clients. This
 example uses neither spawn nor CountingScope.
 
-`io.sendAll(context, fd, buffer, flags)` internally retries short writes with
-`repeatUntil`. An empty buffer returns zero; a zero-byte send for a
+`io.sendAll(context, fd, buffer, flags)` is a dedicated operation: a complete
+send finishes directly, and only a short write resumes through the trampoline
+(checking cancellation) before the next send. An empty buffer returns zero; a zero-byte send for a
 nonempty buffer reports `WriteZero`. Cancellation and errors can occur after a
 partial write, so sending is not transactional. The buffer is borrowed until
 completion and no additional memory is allocated.

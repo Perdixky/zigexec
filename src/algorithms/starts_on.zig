@@ -1,6 +1,8 @@
 const std = @import("std");
-const c = @import("../execution/protocol.zig");
-const traits = @import("../detail/completion_traits.zig");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
+const protocol = @import("../execution/protocol.zig");
+
+const canError = @import("../detail/completion_traits.zig").canError;
 const schedule = @import("../execution/schedule.zig").schedule;
 
 pub fn StartsOn(comptime Scheduler: type, comptime S: type) type {
@@ -9,24 +11,23 @@ pub fn StartsOn(comptime Scheduler: type, comptime S: type) type {
         scheduler: Scheduler,
         sender: S,
         pub const Values = S.Values;
-        pub const can_error = traits.canError(S) or traits.canError(Scheduled);
+        pub const can_error = canError(S) or canError(Scheduled);
         const Self = @This();
         pub fn Operation(comptime R: type) type {
             return struct {
-                receiver: c.TypedReceiver(Values, R),
-                scheduled: c.OperationOf(Scheduled, *Op) = undefined,
-                child: c.OperationOf(S, c.TypedReceiver(Values, R)) = undefined,
-                started: bool = false,
+                receiver: protocol.TypedReceiver(Values, R),
+                scheduled: protocol.OperationOf(Scheduled, *Op) = undefined,
+                child: protocol.OperationOf(S, protocol.TypedReceiver(Values, R)) = undefined,
+                started: StartGuard = .{},
                 const Op = @This();
                 pub fn cleanup(self: *Op, continuation: anytype) void {
-                    c.cleanupOperations(.{ &self.child, &self.scheduled }, continuation);
+                    protocol.cleanupOperations(.{ &self.child, &self.scheduled }, continuation);
                 }
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.scheduled.start();
                 }
-                pub fn getEnv(self: *Op) c.EnvOf(R) {
+                pub fn getEnv(self: *Op) protocol.EnvOf(R) {
                     return self.receiver.getEnv();
                 }
                 pub fn setValue(self: *Op, _: *const Scheduled.Values) void {
@@ -40,10 +41,10 @@ pub fn StartsOn(comptime Scheduler: type, comptime S: type) type {
                 }
             };
         }
-        pub fn connectInto(self: Self, out: anytype, receiver: anytype) void {
-            out.* = .{ .receiver = .init(receiver) };
-            c.connectChild(&out.scheduled, schedule(self.scheduler), out);
-            c.connectChild(&out.child, self.sender, out.receiver);
+        pub fn connectInto(self: Self, out: anytype, r: anytype) void {
+            out.* = .{ .receiver = .init(r) };
+            protocol.connectChild(&out.scheduled, schedule(self.scheduler), out);
+            protocol.connectChild(&out.child, self.sender, out.receiver);
         }
     };
 }

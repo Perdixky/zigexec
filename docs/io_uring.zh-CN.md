@@ -2,13 +2,15 @@
 
 [English](io_uring.md) | **简体中文**
 
-`ex.IoUring.init(allocator, .{ .entries = 64 })` 创建 context、ring、eventfd 与一个 reactor 线程。所有 SQ/CQ 操作由 reactor 执行，跨线程提交通过受锁保护的 intrusive inbox，由 reactor 批量摘取；本 reactor 的重入提交直接进入本地队列，不加队列锁、不写 eventfd。取消使用原子标记，跨线程取消通过 eventfd 唤醒。无需 `std.Io` 或 liburing，直接使用 Zig 的低层 `std.os.linux.IoUring`。
+`ex.IoUring.init(allocator, .{ .entries = 64 })` 创建 context、eventfd 与一个 reactor 线程；ring 由 reactor 自己创建，初始化错误在 `init` 返回前传回。所有 SQ/CQ 操作由 reactor 执行，跨线程提交通过受锁保护的 intrusive inbox，由 reactor 批量摘取；本 reactor 的重入提交在 SQ 有空位且前面没有排队请求时直接写入 SQE，否则进入本地队列；两条路径都不加锁、不写 eventfd。取消使用原子标记，跨线程取消通过 eventfd 唤醒。无需 `std.Io` 或 liburing，直接使用 Zig 的低层 `std.os.linux.IoUring`。
 
 ## API 与内核需求
 
 `ex.io` 提供 `readSome/writeSome/recv/send/openAt/close/fsync/accept/connect/sleepFor`；这些 sender 依赖 context 协议，不直接依赖 io_uring。
 
-context 大小必须为 2 或更大的 2 的幂，受内核 ring 大小限制。初始化要求 `IORING_FEAT_SINGLE_MMAP`（Zig wrapper 要求）与 `IORING_FEAT_NODROP`；应使用支持所需 opcode 的现代 Linux。部署时还须允许 io_uring 系统调用；权限/内核不支持会作为初始化错误返回，不隐式切换到阻塞 I/O。
+context 大小必须为 2 或更大的 2 的幂，受内核 ring 大小限制。初始化要求 `IORING_FEAT_SINGLE_MMAP`（Zig wrapper 要求）、`IORING_FEAT_NODROP` 与 `IORING_ASYNC_CANCEL_ANY`（Linux 5.19+，启动时探测），缺失时返回 `error.SystemOutdated`；应使用支持所需 opcode 的现代 Linux。
+
+默认以 `SINGLE_ISSUER | DEFER_TASKRUN | COOP_TASKRUN`（Linux 6.1+）创建 ring：内核把完成相关的 task work 攒到 reactor 带 `GETEVENTS` 进入 ring 时再执行，而不是打断它；每次 `io_uring_enter` 都带 `GETEVENTS`。内核拒绝这些 flag 时回退为不带 flag 的 ring；`.defer_taskrun = false` 可显式关闭。部署时还须允许 io_uring 系统调用；权限/内核不支持会作为初始化错误返回，不隐式切换到阻塞 I/O。
 
 当前在 Linux `7.2.4-arch1-2`、Zig `0.17.0-dev.2127+e90365cd5` 上进行了真实测试。未对旧内核逐版本验证；新 opcode 不可用会通过该操作的错误通道报告。
 
@@ -37,7 +39,7 @@ operation 嵌入后端 Request，提交与取消不额外分配请求节点。�
 4. 原请求和取消请求分别携带 user_data，最低位标识取消 CQE。
 5. 已提交取消时，两个 CQE 全部收齐后才通知 receiver 并释放 Request。
 
-没有取消事件时不遍历 active 链表。有取消事件或 shutdown 时扫描一次；SQ 满则保留 dirty 标志，下一轮继续。扫描前消费标志，因此与扫描并发的新取消会触发下一轮，不会丢失。当前仍是事件触发的 O(active) 扫描，并非 stdexec 的逐请求取消任务队列。
+sender 启动时，只有 stop token 确实可能触发时才把请求标记为 `cancellable`；只有这类请求进入 active 链表，普通 I/O 不会写入相邻 operation 的缓存行。没有取消事件时不遍历 active 链表。有取消事件时扫描一次；SQ 满则保留 dirty 标志，下一轮继续。扫描前消费标志，因此与扫描并发的新取消会触发下一轮，不会丢失。当前仍是事件触发的 O(active) 扫描，并非 stdexec 的逐请求取消任务队列。
 
 最后一步保证迟到的取消不会引用已被复用的 operation 地址，也保证内核不再借用 buffer。`-ECANCELED` 进入 stopped；若原操作已经成功，仍可发送成功，取消不是抢占或事务回滚。
 
@@ -55,7 +57,7 @@ eventfd 的 poll 始终优先保留/重建，避免 ring 满时失去跨线程�
 
 ## 关闭与错误
 
-`shutdown()` 可从任意线程调用，包含 reactor 回调：关闭新提交，取消队列中和在途请求，并等待实际完成。此方法自身不 join。
+`shutdown()` 可从任意线程调用，包含 reactor 回调：关闭新提交，取消队列中和在途请求，并等待实际完成。此方法自身不 join。队列中的请求以 stopped 完成；在途请求（无论是否 cancellable）由一次 `ASYNC_CANCEL_ANY | ASYNC_CANCEL_ALL` 提交取消。观察到 shutdown 后不再提交新请求，因此这一次取消即可覆盖全部请求。
 
 `deinit()` 调用 shutdown、join worker、销毁 ring 并关闭 eventfd。不可从 reactor 自身调用；context 必须活到其他线程上的 submit/cancel/shutdown 调用返回。内核不可中断的工作可能延长关闭时间，不能承诺固定的取消延迟。
 
@@ -69,7 +71,7 @@ continuation 默认运行在 reactor 线程。不要在该线程阻塞调用 `sy
 
 ## 完整发送与 echo
 
-`sendAll(context, fd, buffer, flags)` 是基于普通 send 的组合操作，使用 repeatUntil 重试短写；成功返回 buffer.len，非空写入无进展时报 WriteZero。错误/取消发生前可能已经发送部分数据。该操作借用 buffer 到完成。TCP 客户端异常关闭时可使用 linux.MSG.NOSIGNAL。
+`sendAll(context, fd, buffer, flags)` 基于普通 send 重试短写，两次 send 之间经 trampoline 继续；成功返回 buffer.len，非空写入无进展时报 WriteZero。错误/取消发生前可能已经发送部分数据。该操作借用 buffer 到完成。TCP 客户端异常关闭时可使用 linux.MSG.NOSIGNAL。
 
 可运行的 [TCP echo 示例](../examples/tcp_echo.zig) 使用 repeat 驱动连接内循环，启动命令为 `zig build run-echo -- 9000`，回环测试为 `zig build test-echo`。
 

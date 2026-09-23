@@ -1,4 +1,5 @@
 const traits = @import("../../detail/completion_traits.zig");
+const StartGuard = @import("../../detail/start_guard.zig").StartGuard;
 const std = @import("std");
 const c = @import("../../execution/protocol.zig");
 pub const Channel = enum { value, err, stopped };
@@ -28,14 +29,13 @@ pub fn Transform(comptime S: type, comptime F: type, comptime channel: Channel) 
                 receiver: c.TypedReceiver(V, R),
                 output: V = undefined,
                 child: c.OperationOf(S, *Op) = undefined,
-                started: bool = false,
+                started: StartGuard = .{},
                 const Op = @This();
                 pub fn cleanup(self: *Op, continuation: anytype) void {
                     c.cleanupOperation(&self.child, continuation);
                 }
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.child.start();
                 }
                 pub fn getEnv(self: *Op) c.EnvOf(R) {

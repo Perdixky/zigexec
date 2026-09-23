@@ -1,4 +1,5 @@
 //! Explicitly owned association with a lazy, composable borrowed sender view.
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const std = @import("std");
 const ex = @import("../root.zig");
 
@@ -49,7 +50,7 @@ pub fn Associated(comptime S: type, comptime Token: type) type {
                     association: Association = .{},
                     child: ex.meta.OperationOf(Wrapped, ex.TypedReceiver(S.Values, R)) = undefined,
                     retirement: ex.Scope.Retirement = .{ .prepare = prepare },
-                    started: bool = false,
+                    started: StartGuard = .{},
                     pub fn cleanup(self: *@This(), continuation: anytype) void {
                         // Preserve downstream borrows while allowing repeat to
                         // reconstruct this storage, including during completion.
@@ -61,8 +62,7 @@ pub fn Associated(comptime S: type, comptime Token: type) type {
                         } else ex.cleanupOperation(&self.child, continuation);
                     }
                     pub fn start(self: *@This()) void {
-                        std.debug.assert(!self.started);
-                        self.started = true;
+                        self.started.begin();
                         const lifetime = self.receiver.getEnv().scope orelse {
                             self.receiver.setError(error.MissingExecutionScope);
                             return;

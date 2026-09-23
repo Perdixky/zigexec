@@ -43,21 +43,20 @@ with libxev and zio, including pinned dependencies, native load generation,
 throughput, RTT, CPU usage, and raw measurements. These results describe the tested
 TCP workloads, not a general ranking of asynchronous libraries.
 
-The [final performance report (Chinese)](benchmarks/PERFORMANCE.zh-CN.md) consolidates
-the optimized implementation's six-scenario comparison, perf counters, and memory layout.
+The [latest performance report (Chinese)](benchmarks/PERFORMANCE.zh-CN.md) covers
+the six-scenario comparison, perf counters, operation layout, and microbenchmarks.
 
-![TCP echo throughput comparison across six workloads](benchmarks/results/2026-09-20-final-throughput.svg)
+![TCP echo throughput comparison across six workloads](benchmarks/results/2026-09-23-throughput.svg)
 
-![User-space CPU cost at 64-byte messages and 256 connections](benchmarks/results/2026-09-20-final-user-cost.svg)
+![User-space CPU cost at 64-byte messages and 256 connections](benchmarks/results/2026-09-23-user-cost.svg)
 
 Bars show medians and dots show every trial. On the tested Ryzen 5 7500F Linux
-loopback setup, the latest zigexec is within -3.3% to +0.0% of libxev throughput
-across the six workloads. Compared with published commit `71ab83b`, its medians
-change by -1.8% to +0.9%, with overlapping five-run ranges in every scenario.
-The cleanup/lifetime revision adds 7.1% user-space cycles per echo and 2.0%
-instructions in the independent perf batch. These measurements apply only to
-the documented single-server-core TCP setup; see the final report for methodology,
-latency, ranges, and limitations.
+loopback setup, zigexec's six throughput medians are within -1.0% to +1.8% of
+libxev. Compared with published commit `69bc11b`, the medians increase by
+1.1% to 3.3%; five of the six five-run ranges overlap. At 64 B / 256
+connections, the independent perf batch shows 47.3% fewer user-space cycles
+and 30.1% fewer instructions per validated echo. See the report for latency,
+microbenchmarks, methodology, and limitations.
 
 ## Composable pipelines
 

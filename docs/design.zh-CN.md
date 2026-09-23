@@ -116,7 +116,7 @@ allocator 属于 Env。syncWait(sender, env) 显式接收环境，其内部 rece
 
 `startsOn` 相当于 schedule 后 letValue 启动上游，只保证启动位置；内部异步 sender 仍可改变完成线程。`continuesOn` 暂存三个完成通道，再调度并转发；调度本身的 error/stopped 优先。
 
-`ThreadPool` 一次性分配 context 与线程数组，队列节点存在 operation 内。`RunLoop.finish` 排空已有提交并拒绝新提交；关闭时后续阶段若再调度可能失败，因此正常路径应先等根 sender 完成。
+`ThreadPool` 一次性分配 context、线程数组与各 worker 队列，任务节点存在 operation 内。每个 worker 拥有有界 FIFO 环：worker 内的提交无锁进入自己的环，空闲 worker 窃取其他 worker 的一半任务，其他线程的提交（或环满时）进入一个加锁的注入队列。只有没有 worker 正在搜索时，提交才唤醒休眠的 worker。`close()` 拒绝新提交；`deinit()` 在 join 前执行完所有已接受的任务。`RunLoop.finish` 排空已有提交并拒绝新提交；关闭时后续阶段若再调度可能失败，因此正常路径应先等根 sender 完成。
 
 ## 共享状态
 

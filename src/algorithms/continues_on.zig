@@ -1,4 +1,5 @@
 const traits = @import("../detail/completion_traits.zig");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 const schedule = @import("../execution/schedule.zig").schedule;
@@ -16,7 +17,7 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
                 child: c.OperationOf(S, *Op) = undefined,
                 transfer: c.OperationOf(ScheduledSender, TransferReceiver) = undefined,
                 result: c.CompletionRef(Values) = undefined,
-                started: bool = false,
+                started: StartGuard = .{},
                 const Op = @This();
                 pub fn cleanup(self: *Op, continuation: anytype) void {
                     c.cleanupOperations(.{ &self.transfer, &self.child }, continuation);
@@ -37,8 +38,7 @@ pub fn ContinuesOn(comptime S: type, comptime Scheduler: type) type {
                     }
                 };
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.child.start();
                 }
                 pub fn getEnv(self: *Op) c.EnvOf(R) {

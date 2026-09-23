@@ -46,7 +46,7 @@ effect 必须成功完成为 **一个 bool**：false 重复，true 结束并产�
 
 重复执行共用 `TrampolineScheduler` 的线程局部状态，默认允许 16 层、约 4096 字节栈距离内的嵌套执行，超过阈值则加入 intrusive FIFO，由最外层调度调用排空。不同 sender 类型、嵌套 repeat 使用同一队列；不再用每个 repeat 的原子 work 计数防递归。栈距离是调度点之间的阈值，不限制用户 callback 自身的栈用量。
 
-实现遵循 stdexec 的 `repeat_until`：每轮子链组合 `startsOn(TrampolineScheduler{})`。首轮在 connect 时构造；完成后清理旧 child、重连整条调度子链，再启动下一轮。scheduler 在每轮 effect 启动前检查取消，包括排队中的轮次；终态在清理后直接转发。
+实现遵循 stdexec 的 `repeat_until`：每轮都经 `TrampolineScheduler{}` 启动。repeat operation 自身嵌入该轮的调度任务，不再每轮连接一个 `startsOn` 包装。首轮 child 在 connect 时构造；完成后清理旧 child，下一轮再重连并启动。每轮 effect 启动前检查取消，包括排队中的轮次；终态在清理后直接转发。
 
 repeat 内部不再持有 iteration `Scope`、资源清理表或执行引用计数，receiver 原样转发环境。清理沿具体子 operation 图执行；`associate` 自行从外层 connection 摘除记录，并通过独立释放动作保护 continuation 期间的资源。普通 child 不访问清理表。生产者通知后不得再访问自身，包括另一线程在 start 返回前完成的情况。自定义资源 operation 可实现 `cleanup(self, continuation)`，详见[生命周期协议](lifetimes.zh-CN.md)。
 
@@ -76,4 +76,4 @@ Client 在根 operation 的完成接收函数中摘链、关闭 fd 并释放自�
 分配失败会关闭刚接收的 fd；accept 链失败则 shutdown context 并排空已有客户端。
 此示例不用 spawn 或 CountingScope。
 
-`io.sendAll(context, fd, buffer, flags)` 内部用 repeatUntil 重试短写，成功返回完整字节数。空 buffer 直接返回 0；非空 buffer 的 send 返回 0 则报告 WriteZero。取消和错误可能发生在已经发出部分数据之后，不保证事务式发送。它借用 buffer 到完成，不额外分配内存；调用方按需提供 MSG.NOSIGNAL 等 socket flags。
+`io.sendAll(context, fd, buffer, flags)` 是专用 operation：一次发完直接完成，只有短写才经 trampoline（并检查取消）继续下一次 send，成功返回完整字节数。空 buffer 直接返回 0；非空 buffer 的 send 返回 0 则报告 WriteZero。取消和错误可能发生在已经发出部分数据之后，不保证事务式发送。它借用 buffer 到完成，不额外分配内存；调用方按需提供 MSG.NOSIGNAL 等 socket flags。

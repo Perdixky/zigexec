@@ -36,7 +36,7 @@ test "scheduler entry points name the same types" {
     try t.expectEqual(@TypeOf(scheduled), ex.Sender(@TypeOf(scheduled)));
     var loop: ex.RunLoop = .{};
     const queue: ex.RunLoop.Scheduler = loop.getScheduler();
-    const queued: ex.Schedule(ex.ThreadPool.Scheduler) = queue.schedule();
+    const queued: ex.Schedule(ex.RunLoop.Scheduler) = queue.schedule();
     try t.expectEqual(@TypeOf(queued), @TypeOf(ex.schedule(queue)));
 }
 

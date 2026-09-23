@@ -2,11 +2,13 @@
 
 **English** | [简体中文](io_uring.zh-CN.md)
 
-`ex.IoUring.init(allocator, .{ .entries = 64 })` creates a context, ring,
-eventfd, and reactor thread. The reactor performs every SQ/CQ operation;
+`ex.IoUring.init(allocator, .{ .entries = 64 })` creates a context, eventfd, and
+reactor thread; the reactor creates the ring itself and reports setup errors
+back before `init` returns. The reactor performs every SQ/CQ operation;
 remote submissions use a lock-protected intrusive inbox detached in batches.
-Reentrant submissions on this reactor append to a local queue without locking or
-writing eventfd. Cancellation uses atomic flags and wakes only for remote calls. The backend requires neither `std.Io` nor
+Reentrant submissions on this reactor are written straight into the SQ when it
+has room and nothing is queued ahead of them; otherwise they append to a local
+queue. Neither path locks or writes eventfd. Cancellation uses atomic flags and wakes only for remote calls. The backend requires neither `std.Io` nor
 liburing and uses Zig's low-level `std.os.linux.IoUring` directly.
 
 ## API and kernel requirements
@@ -17,7 +19,15 @@ depend on the context protocol rather than io_uring itself.
 
 The entry count must be a power of two of at least 2 and is subject to kernel
 limits. Initialization requires `IORING_FEAT_SINGLE_MMAP` (required by Zig's
-wrapper) and `IORING_FEAT_NODROP`. Deployment must permit io_uring syscalls.
+wrapper), `IORING_FEAT_NODROP`, and `IORING_ASYNC_CANCEL_ANY` (Linux 5.19+),
+which is probed at startup; a missing feature returns `error.SystemOutdated`.
+Deployment must permit io_uring syscalls.
+
+By default the ring is created with `SINGLE_ISSUER | DEFER_TASKRUN |
+COOP_TASKRUN` (Linux 6.1+). The kernel then queues completion work until the
+reactor enters the ring asking for events, instead of interrupting it; every
+`io_uring_enter` passes `GETEVENTS`. Kernels that reject these flags fall back
+to a ring without them. `.defer_taskrun = false` opts out explicitly.
 Unsupported kernels or permissions return initialization errors; there is no
 implicit fallback to blocking I/O.
 
@@ -56,7 +66,10 @@ resources.
 
 ## Cancellation and CQE tracking
 
-1. On start, the sender registers a stop callback on the environment token.
+1. On start, the sender registers a stop callback on the environment token and
+   marks the request `cancellable` when that token can actually fire. Only
+   cancellable requests are linked into the reactor's active list, so ordinary
+   I/O never writes into neighbouring operations' cache lines.
 2. The callback marks `cancel_requested`, then the context's `cancel_dirty`;
    remote calls write eventfd. It never touches the SQ or CQ.
 3. An unsubmitted request can stop immediately; an in-flight request receives
@@ -66,7 +79,7 @@ resources.
 5. Once cancellation is submitted, both CQEs must arrive before the receiver is
    notified and the request storage is released.
 
-The active list is scanned only after a cancellation event or shutdown. SQ
+The active list is scanned only after a cancellation event. SQ
 pressure preserves the dirty flag for a retry. Consuming the flag before the
 scan ensures concurrent cancellations trigger this or the next scan. This is
 still an O(active) scan per cancellation batch, not stdexec's individual
@@ -106,7 +119,10 @@ guarantee; request nodes belong to caller operations.
 
 `shutdown()` may be called from any thread, including a reactor callback. It
 rejects new submissions, cancels queued and in-flight work, and waits for real
-completion, but does not join the worker.
+completion, but does not join the worker. Queued requests complete as stopped;
+in-flight requests, cancellable or not, are cancelled by one
+`ASYNC_CANCEL_ANY | ASYNC_CANCEL_ALL` submission. Nothing is submitted after
+shutdown is observed, so that single cancellation reaches every request.
 
 `deinit()` calls shutdown, joins the worker, destroys the ring, and closes
 eventfd. It must not run on the reactor thread. The context must outlive every
@@ -132,8 +148,8 @@ cancellation, 128 queued reads on a two-entry ring, address reuse, connection
 retirement from completion, and shared-timer ownership. Restricted kernels
 are not silently skipped.
 
-`sendAll(context, fd, buffer, flags)` composes ordinary sends with
-`repeatUntil` to retry short writes. It returns `buffer.len`, reports
+`sendAll(context, fd, buffer, flags)` issues ordinary sends and retries short
+writes, resuming through the trampoline between sends. It returns `buffer.len`, reports
 `WriteZero` when a nonempty write makes no progress, and may already have sent
 partial data before an error or cancellation. It borrows the buffer until
 completion. See the runnable [TCP echo example](../examples/tcp_echo.zig).

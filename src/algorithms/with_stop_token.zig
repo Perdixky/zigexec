@@ -1,4 +1,5 @@
 const traits = @import("../detail/completion_traits.zig");
+const StartGuard = @import("../detail/start_guard.zig").StartGuard;
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 const retainUnlessDone = @import("../detail/lifetime.zig").retainUnlessDone;
@@ -20,14 +21,13 @@ pub fn WithStopToken(comptime S: type) type {
                 child: c.OperationOf(S, *Op) = undefined,
                 result: c.CompletionRef(Values) = undefined,
                 remaining: std.atomic.Value(usize) = .init(2),
-                started: bool = false,
+                started: StartGuard = .{},
                 const Op = @This();
                 pub fn cleanup(self: *Op, continuation: anytype) void {
                     c.cleanupOperation(&self.child, continuation);
                 }
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.upstream_stop.init(self.receiver.getEnv().stop_token, self, requestStop);
                     self.added_stop.init(self.token, self, requestStop);
                     self.child.start();

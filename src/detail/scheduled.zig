@@ -1,4 +1,5 @@
 const traits = @import("completion_traits.zig");
+const StartGuard = @import("start_guard.zig").StartGuard;
 const std = @import("std");
 const c = @import("../execution/protocol.zig");
 const Task = @import("task.zig").Task;
@@ -13,11 +14,10 @@ pub fn Scheduled(comptime Scheduler: type) type {
                 scheduler: Scheduler,
                 receiver: c.TypedReceiver(Values, R),
                 task: Task = .{ .run = execute },
-                started: bool = false,
+                started: StartGuard = .{},
                 const Op = @This();
                 pub fn start(self: *Op) void {
-                    std.debug.assert(!self.started);
-                    self.started = true;
+                    self.started.begin();
                     self.scheduler.submit(&self.task) catch |err| {
                         self.receiver.setError(err);
                     };
