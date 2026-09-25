@@ -37,10 +37,20 @@ pub const TrampolineScheduler = struct {
     max_depth: usize = 16,
     max_stack_bytes: usize = 4096,
 
+    /// Counts submit() calls in safety-checked builds so tests can assert that a
+    /// synchronous chain does not pay a hop per round. Always zero in release.
+    var submission_count: if (std.debug.runtime_safety) usize else void =
+        if (std.debug.runtime_safety) 0 else {};
+
+    pub fn submissions() usize {
+        return if (std.debug.runtime_safety) submission_count else 0;
+    }
+
     pub fn schedule(self: TrampolineScheduler) fluent.Sender(Scheduled(TrampolineScheduler)) {
         return fluent.asSender(Scheduled(TrampolineScheduler){ .scheduler = self });
     }
     pub fn submit(self: TrampolineScheduler, task: *Task) error{}!void {
+        if (std.debug.runtime_safety) submission_count += 1;
         if (current) |state| {
             const address = @intFromPtr(&task);
             const distance = @max(address, state.origin) - @min(address, state.origin);

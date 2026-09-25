@@ -3,6 +3,53 @@ const ex = @import("zigexec");
 const t = std.testing;
 const support = @import("support.zig");
 
+test "repeatUntil amortizes trampoline hops across synchronous rounds" {
+    const Tick = struct {
+        count: *usize,
+        pub fn call(self: @This()) bool {
+            self.count.* += 1;
+            return self.count.* == 1000;
+        }
+    };
+    const rounds = 1000;
+    var count: usize = 0;
+    const task = ex.just(.{}).then(Tick, .{&count}).repeatUntil();
+    const before = ex.TrampolineScheduler.submissions();
+    try t.expect((try task.syncWait(.{ .allocator = t.allocator })) != null);
+    const hops = ex.TrampolineScheduler.submissions() - before;
+    try t.expectEqual(rounds, count);
+    // Every round still runs, but a synchronous round is consumed by the
+    // execute() frame that started it, so hops grow with the budget rather
+    // than with the round count.
+    const budget = ex.repeatInlineRounds.*;
+    try t.expect(hops <= rounds / budget + 2);
+    try t.expect(hops < rounds / 4);
+}
+
+test "repeatInlineRounds tunes how many synchronous rounds share one hop" {
+    const rounds = 256;
+    const Tick = struct {
+        count: *usize,
+        pub fn call(self: @This()) bool {
+            self.count.* += 1;
+            return self.count.* == rounds;
+        }
+    };
+    const previous = ex.repeatInlineRounds.*;
+    defer ex.repeatInlineRounds.* = previous;
+    for ([_]usize{ 1, 8, 64, 256 }) |budget| {
+        ex.repeatInlineRounds.* = budget;
+        var count: usize = 0;
+        const task = ex.just(.{}).then(Tick, .{&count}).repeatUntil();
+        const before = ex.TrampolineScheduler.submissions();
+        try t.expect((try task.syncWait(.{ .allocator = t.allocator })) != null);
+        const hops = ex.TrampolineScheduler.submissions() - before;
+        // Every round still runs; only how many share a trampoline frame moves.
+        try t.expectEqual(rounds, count);
+        try t.expectEqual(rounds / budget, hops);
+    }
+}
+
 test "repeatUntil performs many inline iterations without recursive stack growth" {
     const Tick = struct {
         count: *usize,

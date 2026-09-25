@@ -130,6 +130,11 @@ pub const syncWait = wait.syncWait;
 pub const Shared = @import("algorithms/split.zig").Shared;
 pub const split = @import("algorithms/split.zig").split;
 
+/// Repeat tuning: how many synchronously-completing rounds may run on one
+/// trampoline frame before the loop resubmits. Raise it to trade fewer hops for
+/// deeper nesting; the trampoline's own max_depth still caps the stack.
+pub const repeatInlineRounds: *usize = &@import("algorithms/repeat.zig").inline_rounds;
+
 pub const io = @import("io/root.zig");
 pub const IoUring = @import("backends/io_uring/context.zig");
 
