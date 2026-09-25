@@ -64,12 +64,18 @@ intrusive FIFO drained by that outer call. These limits apply at scheduling
 points, not to stack usage inside a user callback. There is no per-repeat atomic
 work counter.
 
-Following stdexec's `repeat_until`, every round starts through
+Following stdexec's `repeat_until`, rounds start through
 `TrampolineScheduler{}`. The repeat operation embeds the round's scheduler task
 itself rather than connecting a `startsOn` wrapper per round. The first child
 connects eagerly; completion cleans up that child, then the next round
 reconnects and starts it. Cancellation is checked before starting each effect,
 including queued iterations. Terminal results forward directly after cleanup.
+
+A round that completes before its `start()` returns is consumed by the
+`execute` call that started it, so an inline chain pays no per-round hop.
+`ex.repeatInlineRounds` (default 16) bounds how many such rounds share one
+frame before the loop resubmits; the trampoline's own limits still cap nesting.
+A round that suspends completes later and owns its own cleanup and submission.
 
 There is no iteration `Scope`, resource registry, or execution reference count
 inside repeat. Its receiver forwards the environment unchanged. Cleanup follows
