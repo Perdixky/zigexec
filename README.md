@@ -97,7 +97,7 @@ const task = source.letValue(
 ```
 
 `SendRequest`, `Decode`, and `AddOffset` are struct types with a `pub fn call`;
-their arguments initialize captured fields. Construction and `connect` do not
+their arguments initialize captured fields. Construction and `connectInto` do not
 execute application callbacks. The graph, callbacks, and types are determined
 at compile time while configuration and other captured state remain runtime
 values. `upstream()` binds the nearest `letValue` input and passes it by value.
@@ -161,7 +161,7 @@ sender. Zig still requires declared return types at function boundaries.
 | Scheduling | `scheduler.schedule()`, `.startsOn(scheduler)`, `.continuesOn(scheduler)` |
 | Cancellation | `StopSource`, `StopToken`, `StopCallback`, `.withStopToken(token)` |
 | Shared computation | `.split(allocator)`, then owner `.sender()`, `.clone()`, `.deinit()`, `.requestStop()` |
-| Consumption | `.syncWait(env)`, `syncWait(sender, env)`, `connect` / `start` |
+| Consumption | `.syncWait(env)`, `syncWait(sender, env)`, `connectInto` / `start` |
 
 `syncWait` returns `anyerror!?Sender.Values`: success is a tuple, errors use
 `try`/`catch`, and stopped is `null`. An empty tuple is distinct from stopped.
@@ -320,7 +320,7 @@ ex.connectInto(&operation, sender, &receiver);
 operation.start();
 ```
 
-`Operation(R)` retains the concrete receiver type. Connection constructs known children at their final addresses; do not copy or move connected storage, and reclaim it during completion or retain it for borrowing. The old two-argument value-returning `connect` is replaced by three-argument in-place construction. Fluent composition, `syncWait`, and `spawn` usage is unchanged. See [lifetimes](docs/lifetimes.md).
+`Operation(R)` retains the concrete receiver type, for custom senders exactly as for built-ins: declare `Values`, `Operation(R)`, and `connectInto(&op, receiver)`. Connection constructs known children at their final addresses; do not copy or move connected storage, and reclaim it during completion or retain it for borrowing. There is no value-returning `connect` and no erased receiver — `connectInto` is the only connection entry point. Fluent composition, `syncWait`, and `spawn` usage is unchanged. See [lifetimes](docs/lifetimes.md).
 
 ## Documentation
 

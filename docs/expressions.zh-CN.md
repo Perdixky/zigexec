@@ -87,7 +87,7 @@ sender.bulk(count, Fill, .{buffer})
 
 ## 存储与异步借用
 
-构造表达式只保存状态；`connect` 不执行业务逻辑。`start` 后，上游把成功 tuple 存入自己的 operation；scope 借用其地址，构造并连接子链，不再重复保存输入。operation 从连接时起必须保持地址稳定。完成通知中即可回收根 connection；拥有者也可以继续保留 child，以延长借用结果的存储寿命。生产者通知后不得再访问自身。见 [生命周期协议](lifetimes.zh-CN.md)。
+构造表达式只保存状态；`connectInto` 不执行业务逻辑。`start` 后，上游把成功 tuple 存入自己的 operation；scope 借用其地址，构造并连接子链，不再重复保存输入。operation 从连接时起必须保持地址稳定。完成通知中即可回收根 connection；拥有者也可以继续保留 child，以延长借用结果的存储寿命。生产者通知后不得再访问自身。见 [生命周期协议](lifetimes.zh-CN.md)。
 
 `upstream()` 在框架内部按引用转发成功 tuple，业务 callback 仍使用其声明的参数类型。跨异步使用的动态 buffer 可以通过 allocator 显式分配，再以 slice 传递。slice 的复制只复制地址和长度，底层分配地址不变；其拥有者负责保持内存有效并最终释放。
 

@@ -36,19 +36,36 @@ const Capture = struct {
         self.done.set();
     }
 };
+/// Completes only when the test calls finish(), which happens before or while
+/// the spawned operation is still live. The typed receiver lives inside the
+/// operation, so the gate keeps a small erasing bridge to reach it later.
 const Gate = struct {
-    receiver: ex.Receiver(Empty) = undefined,
+    context: ?*anyopaque = null,
+    complete: ?*const fn (*anyopaque) void = null,
+    stoppedQuery: ?*const fn (*anyopaque) bool = null,
     output: Empty = .{},
     const Sender = struct {
         gate: *Gate,
         pub const Values = Empty;
         pub const can_error = false;
         pub fn Operation(comptime R: type) type {
+            const Bridge = struct {
+                fn accept(ctx: *anyopaque) void {
+                    const receiver: *ex.TypedReceiver(Empty, R) = @ptrCast(@alignCast(ctx));
+                    receiver.setValue(&.{});
+                }
+                fn stopped(ctx: *anyopaque) bool {
+                    const receiver: *ex.TypedReceiver(Empty, R) = @ptrCast(@alignCast(ctx));
+                    return receiver.getEnv().stop_token.stopRequested();
+                }
+            };
             return struct {
                 gate: *Gate,
                 receiver: ex.TypedReceiver(Empty, R),
                 pub fn start(self: *@This()) void {
-                    self.gate.receiver = ex.Receiver(Empty).init(&self.receiver);
+                    self.gate.context = &self.receiver;
+                    self.gate.complete = Bridge.accept;
+                    self.gate.stoppedQuery = Bridge.stopped;
                 }
             };
         }
@@ -60,7 +77,12 @@ const Gate = struct {
         return .{ .gate = self };
     }
     fn finish(self: *Gate) void {
-        self.receiver.setValue(&self.output);
+        const complete = self.complete orelse @panic("gate completed before its operation started");
+        complete(self.context.?);
+    }
+    fn stopRequested(self: *Gate) bool {
+        const query = self.stoppedQuery orelse @panic("gate queried before its operation started");
+        return query(self.context.?);
     }
 };
 const NeverError = struct {
@@ -134,7 +156,7 @@ test "close rejects new work without canceling existing work" {
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     scope.close();
-    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
+    try t.expect(!gate.stopRequested());
     try t.expectError(error.ScopeClosed, ex.spawn(ex.just(.{}), scope.getToken(), alloc_env));
     var capture: Capture = .{};
     var join: ex.Connection(@TypeOf(scope.join()), @TypeOf(&capture)) = undefined;
@@ -162,7 +184,7 @@ test "stopped child does not cancel peers or close scope" {
     var gate: Gate = .{};
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     try ex.spawn(ex.justStopped(Empty), scope.getToken(), alloc_env);
-    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
+    try t.expect(!gate.stopRequested());
     try ex.spawn(ex.just(.{}), scope.getToken(), alloc_env);
     gate.finish();
     try t.expect((try scope.join().syncWait(.{})) != null);
@@ -181,7 +203,7 @@ test "join cancellation never cancels scope children or skips waiting" {
     join.start();
     _ = stop.requestStop();
     try t.expect(!capture.finished);
-    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
+    try t.expect(!gate.stopRequested());
     gate.finish();
     // InlineScheduler observes the join receiver's cancellation on scheduling.
     try t.expect(capture.finished and capture.stopped);
@@ -283,7 +305,7 @@ test "handled child error stays local and join has no error aggregation" {
     var handled = false;
     try ex.spawn(gate.sender(), scope.getToken(), alloc_env);
     try ex.spawn(ex.justError(Empty, error.ChildFailed).uponError(Handle, .{&handled}), scope.getToken(), alloc_env);
-    try t.expect(handled and !gate.receiver.getEnv().stop_token.stopRequested());
+    try t.expect(handled and !gate.stopRequested());
     gate.finish();
     _ = try scope.join().syncWait(.{});
 }
@@ -406,7 +428,7 @@ test "runInScope successful producer drains without canceling children" {
     ex.connectInto(&run, ex.runInScope(&scope, ex.just(.{})), &capture);
     run.start();
     try t.expect(!capture.finished);
-    try t.expect(!gate.receiver.getEnv().stop_token.stopRequested());
+    try t.expect(!gate.stopRequested());
     gate.finish();
     try t.expect(capture.finished and !capture.stopped);
 }

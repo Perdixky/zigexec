@@ -218,5 +218,6 @@ State 和 child，从而避免不必要的泛型类型依赖环。
 在最终地址初始化；连接后禁止复制/移动。已知子节点在连接阶段构造，
 start 只启动工作；工厂依赖输入和 repeat 重连保留相应的延迟时机。
 具体 receiver 可引用父状态，这不再要求逐层保留 sender 或使用类型擦除。
-旧自定义 sender 的 `Operation` / `connect` 通过显式兼容桥接执行；
-内建图不走该擦除路径。低层 API 有意更改，链式组合 API 保持不变。
+所有 sender（含自定义）统一实现 `Values` / `Operation(R)` / `connectInto`，
+没有按值 `connect` 的兼容桥接，也没有擦除版 `Receiver`。
+低层 API 有意更改，链式组合 API 保持不变。

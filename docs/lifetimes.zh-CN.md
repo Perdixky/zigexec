@@ -113,8 +113,8 @@ pub fn getEnv(_: *@This()) ex.UnstoppableEnv { return .{}; }
 ```
 
 `withStopToken` 和需要取消兄弟分支的组合仍提供可取消环境。`readEnv()` 为保持
-其静态 `Values` API，返回动态 `Env` 快照；显式使用旧 erased Receiver 也属于
-环境类型擦除边界。自定义转发 receiver 应使用 `ex.EnvOf(R)` 作为 getEnv 返回类型，
+其静态 `Values` API，返回动态 `Env` 快照，也是有意擦除环境类型的唯一途径。
+自定义转发 receiver 应使用 `ex.EnvOf(R)` 作为 getEnv 返回类型，
 若有意返回动态 Env，则显式调用 `.toDynamic()`。
 
 测试覆盖 completion 内释放整个 receiver/connection、另一个线程在 start 返回前

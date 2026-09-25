@@ -21,7 +21,7 @@ pub fn build(b: *std.Build) void {
     const diagnostic_cases = .{
         .{ "when_any_empty", "zigexec.whenAny: requires at least one sender" },
         .{ "when_any_container", "zigexec.whenAny: expected a tuple or named struct of senders" },
-        .{ "when_any_sender", "zigexec.whenAny: i64 must return a sender or !sender (Values, Operation.start, connect); got i64" },
+        .{ "when_any_sender", "zigexec.whenAny: i64 must return a sender or !sender (Values, Operation(R), connectInto); got i64" },
         .{ "when_all_arity", "expects 1 upstream value(s), but upstream provides 2" },
         .{ "spawn_errors", "zigexec.spawn: sender may complete with error; handle errors with an infallible uponError or letError before spawning" },
         .{ "spawn_fallible_handler", "zigexec.spawn: sender may complete with error; handle errors with an infallible uponError or letError before spawning" },
@@ -37,7 +37,7 @@ pub fn build(b: *std.Build) void {
         .{ "capture_missing", "missing field offset" },
         .{ "capture_unknown", "has no field typo" },
         .{ "capture_count", "positional state must supply every field; use a named initializer for defaults" },
-        .{ "not_sender", "must return a sender or !sender (Values, Operation.start, connect); got i64" },
+        .{ "not_sender", "must return a sender or !sender (Values, Operation(R), connectInto); got i64" },
         .{ "not_body", "zigexec.letValue: expected a sender factory type, a sender value, or an upstream() subchain" },
         .{ "sender_captures", "zigexec.letValue: sender/subchain operands require .{} as args; captures belong to factory callbacks" },
         .{ "expression_captures", "zigexec.letValue: sender/subchain operands require .{} as args; captures belong to factory callbacks" },

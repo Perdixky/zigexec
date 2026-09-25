@@ -62,7 +62,7 @@ setValue 接收 *const Values；receiver 可在任意 completion 中回收 opera
 在构造阶段连接已知子节点、允许具体 receiver 引用父状态的做法一致，研究见
 [P2300 operation 构造研究](p2300-operation-state.zh-CN.md)。
 
-`connect` 是不可失败的协议。需要资源分配时在显式构造函数返回错误，或在启动后通过 error 通道报告。未启动的普通 operation 不持有需要析构的资源；Shared view 在 `start` 才取得状态引用。
+`connectInto` 是不可失败的协议。需要资源分配时在显式构造函数返回错误，或在启动后通过 error 通道报告。未启动的普通 operation 不持有需要析构的资源；Shared view 在 `start` 才取得状态引用。
 
 ## Zig API 取舍
 
@@ -86,7 +86,7 @@ setValue 接收 *const Values；receiver 可在任意 completion 中回收 opera
 
 每个 sender 有一个静态成功 tuple，错误统一为 `anyerror`，stopped 独立。`syncWait` 返回 `anyerror!?Values`。回调 `void/!void` 成功产生空 tuple，`T/!T` 成功产生单元素 tuple。恢复分支必须保持成功 tuple 类型，异形结果可作为 tagged union 值传递。
 
-内建 sender 的 `Operation(R)` 保留 receiver 具体类型；`TypedReceiver(Values, R)` 只存储 R，完成调用静态分派。`Receiver(Values)` 仅作为旧自定义 sender 的显式擦除边界保留。内核请求、取消回调、异构等待队列的通知入口仍使用函数指针，不宣称整套运行时完全没有间接调用。
+每个 sender 的 `Operation(R)` 都保留 receiver 具体类型；`TypedReceiver(Values, R)` 只存储 R，完成调用静态分派，`OperationOf` 就是 `S.Operation(R)` 的别名，没有擦除回退路径。内核请求、取消回调、异构等待队列的通知入口仍使用函数指针，因此这是 sender 层的静态分派，不宣称整套运行时完全没有间接调用。
 
 ## 类型构造器与上下文推导
 

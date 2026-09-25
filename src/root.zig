@@ -41,7 +41,6 @@ pub const StopSource = core.StopSource;
 pub const StopToken = core.StopToken;
 pub const StopCallback = core.StopCallback;
 pub const Completion = core.Completion;
-pub const Receiver = core.Receiver;
 pub const Connection = @import("execution/connect.zig").Connection;
 pub const Scope = core.Scope;
 pub const SimpleCountingScope = @import("scopes/simple_counting_scope.zig");
@@ -53,7 +52,6 @@ pub fn RunInScope(comptime S: type) type {
 pub const spawn = @import("consumers/spawn.zig").spawn;
 pub const StartScheduler = @import("schedulers/start_scheduler.zig");
 pub const ScheduleTask = @import("detail/task.zig").Task;
-pub const connect = core.connect;
 pub const connectInto = core.connectInto;
 pub const TypedReceiver = core.TypedReceiver;
 pub const start = core.start;

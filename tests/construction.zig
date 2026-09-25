@@ -136,20 +136,23 @@ test "large factory capture occurs once across ordinary adaptors and root" {
     try t.expect(address + 16 * 1024 <= @intFromPtr(&op) + @sizeOf(Op));
 }
 
-test "explicit legacy sender bridge retains a stable receiver" {
-    const Legacy = struct {
+test "custom senders compose with built-ins when they implement the typed protocol" {
+    const Custom = struct {
         pub const Values = Empty;
-        pub const Operation = struct {
-            receiver: ex.Receiver(Empty),
-            pub fn start(self: *@This()) void {
-                self.receiver.setValue(&.{});
-            }
-        };
-        pub fn connect(_: @This(), receiver: ex.Receiver(Empty)) Operation {
-            return .{ .receiver = receiver };
+        pub const can_error = false;
+        pub fn Operation(comptime R: type) type {
+            return struct {
+                receiver: ex.TypedReceiver(Empty, R),
+                pub fn start(self: *@This()) void {
+                    self.receiver.setValue(&.{});
+                }
+            };
+        }
+        pub fn connectInto(_: @This(), out: anytype, receiver: anytype) void {
+            out.* = .{ .receiver = .init(receiver) };
         }
     };
-    const task = ex.whenAll(.{ ex.asSender(Legacy{}).startsOn(ex.InlineScheduler{}), Legacy{} });
+    const task = ex.whenAll(.{ ex.asSender(Custom{}).startsOn(ex.InlineScheduler{}), Custom{} });
     var capture: Capture = .{};
     var op: ex.Connection(@TypeOf(task), *Capture) = undefined;
     ex.connectInto(&op, task, &capture);

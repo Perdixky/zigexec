@@ -180,6 +180,14 @@ test "I/O named types match every constructor without running I/O" {
 }
 
 test "meta helpers describe operations and do not execute factories" {
+    const Probe = struct {
+        pub fn getEnv(_: *@This()) ex.Env {
+            return .{ .allocator = std.testing.allocator };
+        }
+        pub fn setValue(_: *@This(), _: *const ex.Values(.{i64})) void {}
+        pub fn setError(_: *@This(), _: anyerror) void {}
+        pub fn setStopped(_: *@This()) void {}
+    };
     const Factory = struct {
         fn forbidden(_: i64) ex.Just(.{i64}) {
             @panic("type query executed a function");
@@ -188,7 +196,7 @@ test "meta helpers describe operations and do not execute factories" {
     const S = ex.meta.ReturnOf(Factory.forbidden, .{i64});
     try t.expectEqual(ex.Just(.{i64}), S);
     try t.expectEqual(ex.Values(.{i64}), ex.meta.ValuesOf(S));
-    try t.expectEqual(S.Operation(ex.Receiver(S.Values)), ex.meta.OperationOf(S, ex.Receiver(S.Values)));
+    try t.expectEqual(S.Operation(*Probe), ex.meta.OperationOf(S, *Probe));
     const result: ex.meta.WaitResult(S) = ex.just(.{42}).syncWait(.{ .allocator = std.testing.allocator });
     try t.expectEqual(42, (try result).?[0]);
 }

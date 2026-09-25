@@ -55,7 +55,6 @@ pub fn connectInto(out: anytype, s: anytype, r: anytype) void {
     checked.* = .{ .state = .{ .receiver = .init(r) } };
     receiver.connectChild(&out.child, s, &out.state);
 }
-pub const connect = connectInto;
 pub fn start(operation: anytype) void {
     operation.start();
 }

@@ -129,10 +129,9 @@ pub fn getEnv(_: *@This()) ex.UnstoppableEnv { return .{}; }
 ```
 
 `withStopToken` and sibling-canceling combinators still provide stoppable environments.
-`readEnv()` returns a dynamic Env snapshot to preserve its static Values API. The
-explicit legacy erased Receiver also erases environment types. Custom forwarding
-receivers should return `ex.EnvOf(R)`, or explicitly use `.toDynamic()` when a
-dynamic Env is intended.
+`readEnv()` returns a dynamic Env snapshot to preserve its static Values API, and is
+the way to erase environment types deliberately. Custom forwarding receivers should
+return `ex.EnvOf(R)`, or explicitly use `.toDynamic()` when a dynamic Env is intended.
 
 Tests cover destroying the embedded receiver and connection during completion,
 completion before start returns, synchronous/asynchronous repeat, retained 64 KiB

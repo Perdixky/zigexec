@@ -85,7 +85,7 @@ P2300 also connects known children during operation construction and permits
 concrete internal receivers to reference parent state; see the
 [P2300 construction research (Chinese)](p2300-operation-state.zh-CN.md).
 
-`connect` is infallible as a protocol. Explicit constructors may return
+`connectInto` is infallible as a protocol. Explicit constructors may return
 allocation errors, or startup may report failures through the error channel.
 An unstarted ordinary operation owns no resource requiring destruction; a
 shared view retains state only when started.
@@ -124,10 +124,12 @@ separate channels. `syncWait` returns `anyerror!?Values`. Callback
 one-element tuple. Recovery preserves the original success tuple; heterogeneous
 application outcomes can use a tagged union value.
 
-Built-in `Operation(R)` types retain concrete receivers. `TypedReceiver(Values, R)`
-stores only R and dispatches completion statically. `Receiver(Values)` remains an
-explicit legacy boundary. Backend requests, cancellation hooks, and heterogeneous
-wait queues still use function pointers for their runtime dispatch.
+Every [`Operation(R)`] type retains a concrete receiver. `TypedReceiver(Values, R)`
+stores only R and dispatches completion statically, and `OperationOf` is a plain
+alias for `S.Operation(R)` — no erased fallback. Backend requests, cancellation
+hooks, and heterogeneous wait queues still use function pointers for their
+runtime dispatch, so this is static *sender* dispatch, not a claim that the
+whole runtime avoids indirect calls.
 
 ## Type construction and contextual inference
 

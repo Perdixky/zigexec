@@ -10,7 +10,7 @@ fn isExpression(comptime Body: type) bool {
 }
 fn NextSender(comptime Body: type, comptime Input: type) type {
     if (isExpression(Body)) return Body.Bound(Input);
-    if (@typeInfo(Body) == .@"struct" and @hasDecl(Body, "Values") and @hasDecl(Body, "Operation") and (@hasDecl(Body, "connectInto") or @hasDecl(Body, "connect"))) {
+    if (@typeInfo(Body) == .@"struct" and @hasDecl(Body, "Values") and @hasDecl(Body, "Operation") and @hasDecl(Body, "connectInto")) {
         @import("../../detail/diagnostics.zig").requireSender(Body, Body, "letValue");
         return Body;
     }
